@@ -1,85 +1,110 @@
+import os
+# Evita conflictos de librerías duplicadas OpenMP en Windows
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 import cv2
 import torch
+import numpy as np
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from ultralytics import YOLO
 
-def main():
-    # 1. Configurar la ruta de tus mejores pesos entrenados
-    # Revisa que esta ruta coincida exactamente con la de tu ordenador
-    weights_path = r"C:\Users\Firecraft811\Desktop\Safety Helmet Wearing Dataset\runs\detect\TFG_PPE_Detection\YOLO26s_Base_Run\weights\best.pt"
-    
-    # 2. Detectar aceleración por hardware (Tu RTX 5060)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Lanzando entorno de inferencia en: {device.upper()}")
+app = FastAPI(title="YOLO26s Web Inference Engine")
 
-    # 3. Cargar el modelo YOLO26s
-    model = YOLO(weights_path)
+# Permitir conexiones desde el puerto de React (CORS)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    # 4. Inicializar la cámara del ordenador
-    # El índice '0' activa la webcam integrada. Si usas una webcam USB externa, prueba con '1'.
+# 1. Configurar rutas y hardware de forma segura
+current_dir = os.path.dirname(os.path.abspath(__file__))
+weights_path = os.path.join(current_dir, "best.pt")
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"\n[SISTEMA]: Inicializando entorno en: {device.upper()}")
+
+# 2. Cargar el modelo de forma global
+model = YOLO(weights_path)
+
+# Solo activar FP16 si hay GPU disponible
+use_half = True if device == "cuda" else False
+
+# 3. Warm-up de la GPU para evitar retrasos iniciales
+print("[SISTEMA]: Realizando Warm-up de los tensores de vídeo...")
+warmup_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+model.predict(warmup_frame, device=device, conf=0.325, half=use_half, verbose=False)
+print("[SISTEMA]: Motor listo y optimizado.")
+
+def gen_frames():
+    """Generador continuo de frames procesados para streaming web."""
     cap = cv2.VideoCapture(0)
-    
-    # Forzar una resolución fluida para la captura de video
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
     if not cap.isOpened():
-        print("Error: No se puede acceder a la webcam.")
+        print("[ERROR]: No se puede acceder a la webcam.")
         return
 
-    print("\n--- ¡Sistema de Vigilancia Activo! ---")
-    print("Presiona la tecla 'q' para cerrar la ventana del sistema.")
+    try:
+        while True:
+            success, frame = cap.read()
+            if not success:
+                break
+            
+            # Efecto espejo para comodidad del usuario
+            frame = cv2.flip(frame, 1)
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            print("Error al leer el frame de la cámara.")
-            break
+            # Inferencia YOLO con parámetros optimizados
+            results = model.predict(frame, device=device, conf=0.325, half=use_half, verbose=False)
+            boxes = results[0].boxes
 
-        # Mirror effect (opcional: voltea la imagen para que actúe como un espejo natural)
-        frame = cv2.flip(frame, 1)
+            # Renderizado personalizado de las cajas delimitadoras
+            for box in boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                conf = float(box.conf[0])
+                class_id = int(box.cls[0])
+                class_name = model.names[class_id]
 
-        # 5. Ejecutar la predicción de YOLO26s con los parámetros óptimos de tu TFG
-        # - conf=0.325: Extraído directamente del pico de tu curva F1 enviado anteriormente.
-        # - half=True: Activa FP16 para maximizar los FPS en tu RTX 5060.
-        results = model.predict(frame, device=device, conf=0.325, half=True, verbose=False)
-        
-        boxes = results[0].boxes
+                if "no_helmet" in class_name.lower() or class_name.lower() == "head":
+                    color = (0, 0, 255)  # ROJO
+                    label = f"ALERTA: {class_name} ({conf:.2f})"
+                elif "with_helmet" in class_name.lower() or class_name.lower() == "helmet":
+                    color = (0, 255, 0)  # VERDE
+                    label = f"OK: {class_name} ({conf:.2f})"
+                else:
+                    color = (255, 165, 0)  # NARANJA
+                    label = f"{class_name} ({conf:.2f})"
 
-        # 6. Lógica de renderizado personalizado por colores
-        for box in boxes:
-            # Extraer coordenadas, confianza y ID de clase
-            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-            conf = float(box.conf[0])
-            class_id = int(box.cls[0])
-            class_name = model.names[class_id]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, label, (x1, max(y1 - 10, 20)), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-            # Definición dinámica del color según el riesgo (Formato BGR en OpenCV)
-            if "no_helmet" in class_name.lower() or class_name.lower() == "head":
-                color = (0, 0, 255)      # ROJO para infracciones o zonas desprotegidas
-                label = f"ALERTA: {class_name} ({conf:.2f})"
-            elif "with_helmet" in class_name.lower() or class_name.lower() == "helmet":
-                color = (0, 255, 0)      # VERDE para EPI correcto colocado
-                label = f"OK: {class_name} ({conf:.2f})"
-            else:
-                color = (255, 165, 0)    # NARANJA/AZUL para clases neutras (como 'face')
-                label = f"{class_name} ({conf:.2f})"
+            # Codificar el resultado final en formato JPEG
+            ret, buffer = cv2.imencode('.jpg', frame)
+            if not ret:
+                continue
+            
+            # Enpaquetar frame en formato binario para el streaming
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                   
+    except Exception as e:
+        print(f"[ERROR DURANTE STREAMING]: {e}")
+    finally:
+        cap.release()
+        print("[SISTEMA]: Captura de vídeo liberada.")
 
-            # Dibujar el rectángulo contenedor y la etiqueta de texto en el frame
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(frame, label, (x1, max(y1 - 10, 20)), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-        # 7. Mostrar la interfaz en tiempo real
-        cv2.imshow("TFG - Sistema de Detección de EPIs en Tiempo Real (YOLO26s)", frame)
-
-        # Romper el bucle de video de forma segura si el usuario pulsa la tecla 'q'
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    # Liberar recursos de hardware
-    cap.release()
-    cv2.destroyAllWindows()
-    print("Sistema cerrado correctamente.")
+@app.get("/api/stream")
+def video_feed():
+    """Endpoint principal de streaming de vídeo para el frontend."""
+    return StreamingResponse(gen_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    # Lanzamos el backend en el puerto 8000
+    uvicorn.run(app, host="0.0.0.0", port=8000)
