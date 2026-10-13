@@ -85,3 +85,16 @@ El stream de vídeo renderiza las cajas de detección en tiempo real según los 
  - 🟢 Verde (OK): Cumplimiento normativo (Casco colocado correctamente: with_helmet o helmet).
 
  - 🟠 Naranja: Elementos neutros analizados en el entorno (face).
+
+## Seguridad y acceso a la red
+
+Por defecto el backend escucha en `0.0.0.0:8000` con CORS abierto (`*`) y **sin autenticación**: cualquier equipo de la misma red puede ver el vídeo, leer el registro de infracciones y cambiar los ajustes. Es adecuado para una demostración en una red de confianza, pero no para una red compartida o pública.
+
+Para limitar el acceso a este equipo, arranca el backend con:
+
+```powershell
+$env:GUARDWATCH_HOST = "127.0.0.1"
+python execute.py
+```
+
+Las cámaras IP solo admiten URLs `http://`, `https://` o `rtsp://`.
