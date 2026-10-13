@@ -19,6 +19,23 @@ class Runtime(NamedTuple):
     half: bool       # FP16 (solo con pesos .pt en GPU)
 
 
+def precision_kwargs(half: bool) -> dict:
+    """Argumentos de precisión para model.predict(), válidos en versiones nuevas y antiguas de Ultralytics.
+
+    Las versiones recientes sustituyen `half` por `quantize` y avisan en cada llamada si se usa `half`.
+    Con FP32 o con un motor TensorRT (la precisión ya va dentro del motor) no hace falta pasar nada.
+    """
+    if not half:
+        return {}
+    try:
+        from ultralytics.cfg import DEFAULT_CFG_DICT
+        if "quantize" in DEFAULT_CFG_DICT:
+            return {"quantize": 16}
+    except Exception:
+        pass
+    return {"half": True}
+
+
 def _onnx_has_cuda() -> bool:
     try:
         import onnxruntime as ort

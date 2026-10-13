@@ -16,7 +16,7 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
-from runtime import select_runtime
+from runtime import precision_kwargs, select_runtime
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -61,7 +61,7 @@ def main():
     latencies = []
     for i, frame in enumerate(frame_source(args.source, args.warmup + args.frames)):
         start = time.perf_counter()
-        model.predict(frame, device=device, conf=args.conf, half=half, verbose=False)
+        model.predict(frame, device=device, conf=args.conf, verbose=False, **precision_kwargs(half))
         elapsed = (time.perf_counter() - start) * 1000
         if i >= args.warmup:
             latencies.append(elapsed)
