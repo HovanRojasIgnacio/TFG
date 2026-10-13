@@ -1,4 +1,6 @@
 import os
+# Ultralytics no debe instalar paquetes por su cuenta con pip (puede modificar el Python global)
+os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 from ultralytics import YOLO
 
 def exportar_modelo():
