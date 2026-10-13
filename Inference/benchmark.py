@@ -14,18 +14,11 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
+from runtime import select_runtime
+
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-
-
-def pick_weights() -> str:
-    # Mismo orden de preferencia que execute.py
-    for name in ("best.engine", "best.onnx", "best.pt"):
-        path = os.path.join(current_dir, name)
-        if os.path.exists(path):
-            return path
-    raise FileNotFoundError(f"No se encontró best.engine, best.onnx ni best.pt en {current_dir}")
 
 
 def frame_source(source, total: int):
@@ -57,11 +50,11 @@ def main():
     parser.add_argument("--conf", type=float, default=0.325)
     args = parser.parse_args()
 
-    weights = pick_weights()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    half = device == "cuda" and weights.endswith(".pt")
-    model = YOLO(weights)
-    print(f"Modelo: {os.path.basename(weights)} | Dispositivo: {device} | half={half}")
+    # Misma selección que execute.py: GPU siempre que sea posible
+    weights, device, half = select_runtime(current_dir)
+    model = YOLO(weights, task="detect")
+    gpu_name = torch.cuda.get_device_name(0) if device == "cuda" else "-"
+    print(f"Modelo: {os.path.basename(weights)} | Dispositivo: {device} ({gpu_name}) | half={half}")
 
     latencies = []
     for i, frame in enumerate(frame_source(args.source, args.warmup + args.frames)):

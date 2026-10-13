@@ -6,13 +6,13 @@ import threading
 from collections import deque
 from typing import Dict, List, Optional, Union
 import numpy as np
-import torch
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from ultralytics import YOLO
+from runtime import select_runtime
 
 # Evita el error de Windows "OpenMP runtime already initialized" cuando torch, numpy y
 # OpenCV cargan cada uno su propia copia de libiomp (workaround habitual).
@@ -38,21 +38,10 @@ os.makedirs(infractions_dir, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Selección de modelo
-engine_file = os.path.join(current_dir, "best.engine")
-onnx_file = os.path.join(current_dir, "best.onnx")
-pt_file = os.path.join(current_dir, "best.pt")
-
-if os.path.exists(engine_file):
-    weights_path = engine_file
-elif os.path.exists(onnx_file):
-    weights_path = onnx_file
-else:
-    weights_path = pt_file
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model = YOLO(weights_path)
-use_half = bool(device == "cuda" and weights_path.endswith('.pt'))
+# Selección de dispositivo y modelo: GPU siempre que sea posible (véase runtime.py)
+weights_path, device, use_half = select_runtime(current_dir)
+logger.info("Modelo: %s | dispositivo: %s | FP16: %s", os.path.basename(weights_path), device, use_half)
+model = YOLO(weights_path, task="detect")
 
 # Warm-up inicial
 warmup_frame = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -63,7 +52,7 @@ _camera_cache = {"cameras": [], "last_update": 0}
 _camera_cache_lock = threading.Lock()
 CAMERA_CACHE_TTL = 10.0  # Cache for 10 seconds
 ALLOWED_IP_SCHEMES = ("http://", "https://", "rtsp://")  # Esquemas admitidos para cámaras IP
-RECONNECT_MIN_DELAY = 2.0  # Espera inicial entre reintentos de conexión (s)
+RECONNECT_MIN_DELAY = 2.0 # Espera inicial entre reintentos de conexión (s)
 RECONNECT_MAX_DELAY = 15.0  # Espera máxima entre reintentos (s)
 
 
