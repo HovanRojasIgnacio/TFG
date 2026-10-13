@@ -368,7 +368,7 @@ class VideoPipeline:
                     color, label = (0, 255, 0), f"OK: Casco ({conf:.2f})"
                 else:
                     current_counts["face"] += 1
-                    color, label = (255, 165, 0), f"Rostro ({conf:.2f})"
+                    color, label = (0, 165, 255), f"Rostro ({conf:.2f})"  # BGR: naranja
 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, label, (x1, max(y1 - 10, 20)),
