@@ -66,8 +66,9 @@ export default function CameraModal({
         </p>
         <div className="ip-camera-form">
           <div className="form-group">
-            <label>Nombre:</label>
+            <label htmlFor="ip-camera-name">Nombre:</label>
             <input
+              id="ip-camera-name"
               type="text"
               value={ipCameraName}
               onChange={(e) => setIpCameraName(e.target.value)}
@@ -75,8 +76,9 @@ export default function CameraModal({
             />
           </div>
           <div className="form-group">
-            <label>URL de Streaming:</label>
+            <label htmlFor="ip-camera-url">URL de Streaming:</label>
             <input
+              id="ip-camera-url"
               type="text"
               value={ipCameraUrl}
               onChange={(e) => setIpCameraUrl(e.target.value)}

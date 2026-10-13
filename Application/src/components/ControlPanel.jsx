@@ -26,10 +26,12 @@ export default function ControlPanel({
 
       <div className="control-group">
         <div className="slider-header">
-          <span className="control-label">Umbral de Confianza (Conf):</span>
+          <label className="control-label" htmlFor="confidence-slider">Umbral de Confianza (Conf):</label>
           <span className="slider-value">{conf.toFixed(3)}</span>
         </div>
         <input
+          id="confidence-slider"
+          aria-describedby="confidence-help"
           type="range"
           min="0.10"
           max="0.95"
@@ -38,13 +40,14 @@ export default function ControlPanel({
           onChange={onConfidenceChange}
           className="modern-slider"
         />
-        <p className="slider-desc">Ajusta la exigencia probabilística de las predicciones.</p>
+        <p className="slider-desc" id="confidence-help">Ajusta la exigencia probabilística de las predicciones.</p>
       </div>
 
       <div className="control-row">
-        <span className="control-label">Alarma Sonora Reactiva:</span>
+        <label className="control-label" htmlFor="alarm-toggle">Alarma Sonora Reactiva:</label>
         <label className="switch">
           <input
+            id="alarm-toggle"
             type="checkbox"
             checked={soundEnabled}
             onChange={onToggleSound}
