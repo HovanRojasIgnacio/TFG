@@ -48,9 +48,12 @@ pip install -r requirements.txt
 # Comprobar que la GPU está disponible (debe imprimir True y el nombre de la tarjeta)
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 
-# (Opcional) Si quieres optimizar tu best.pt a formatos ultrarrápidos (.engine / .onnx):
-# Si la exportación a TensorRT falla, se conserva el .onnx y el servidor lo usará automáticamente.
+# (Opcional, recomendado) Motor TensorRT: unas 3 veces más rápido que best.pt en FP16
+# (4 ms frente a 11 ms por fotograma en una RTX 5060). Genera best.onnx y best.engine.
+# El motor depende de tu GPU y de la versión de TensorRT, por eso no se sube a git.
+pip install -r requirements-tensorrt.txt
 python export.py
+# Si no hay motor, el servidor usa best.pt en la GPU; si la exportación TensorRT falla se conserva el .onnx.
 
 # (Opcional) Medir latencia y FPS de inferencia del modelo (sin cámara):
 python benchmark.py

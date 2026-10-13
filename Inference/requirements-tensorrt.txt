@@ -1,0 +1,17 @@
+# Opcional: exportar y ejecutar un motor TensorRT (python export.py). Probado en Windows con
+# Python 3.14, RTX 5060 (Blackwell, sm_120), PyTorch 2.12.0+cu130 y Ultralytics 8.4.177.
+# Instalar DESPUÉS de requirements.txt y con PyTorch CUDA ya instalado (véase el README).
+#
+# TensorRT 11 es la única versión con paquete para Python 3.14. Ultralytics 8.4.23 no puede
+# generar motores con TensorRT 11 (falta EXPLICIT_BATCH); por eso requirements.txt fija 8.4.177.
+tensorrt-cu13==11.4.0.106
+nvidia-modelopt==0.47.0
+onnx==1.21.0
+onnxslim==0.1.94
+onnxruntime-gpu==1.31.0
+onnx-graphsurgeon==0.6.1
+onnxscript==0.7.2
+onnxconverter-common==1.16.0
+lief==1.0.0
+cppimport==26.4.17
+polygraphy==0.53.6
