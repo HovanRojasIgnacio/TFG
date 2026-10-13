@@ -81,7 +81,7 @@ npm install
 # Lanzar el servidor de desarrollo de React
 npm run dev
 ```
-El frontend se levantará en el navegador en la dirección: http://localhost:5173
+El frontend se levantará en el navegador en la dirección: http://localhost:5173/TFG/ (la ruta `/TFG/` viene de `base` en `vite.config.js`)
 
 ## Despliegue en GitHub Pages
 La interfaz de usuario está configurada para compilarse y alojarse directamente de forma estática en GitHub. Si realizas cambios en el diseño de tu app de React y quieres actualizar la versión online, ejecuta desde la carpeta Application:
