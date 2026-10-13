@@ -177,7 +177,7 @@ body {
 }
 
 .control-btn.danger {
-  background-color: var(--danger);
+  background-color: #dc2626; /* más oscuro que --danger: texto blanco con contraste >= 4.5:1 */
   color: #fff;
 }
 
