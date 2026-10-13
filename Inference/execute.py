@@ -1,4 +1,6 @@
 import os
+# Ultralytics no debe instalar paquetes por su cuenta con pip (puede modificar el Python global)
+os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 import logging
 import cv2
 import time
