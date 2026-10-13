@@ -8,6 +8,9 @@ import { API_BASE } from '../config';
 export function useCameras(setTelemetry, onSelected) {
   const [availableCameras, setAvailableCameras] = useState([]);
   const [testingCamera, setTestingCamera] = useState(false);
+  // Error del último intento de cambio de cámara. Va aparte de telemetry.camera_error, que el
+  // sondeo de /api/stats sobrescribe cada 500 ms con el estado del backend.
+  const [selectError, setSelectError] = useState(null);
 
   // Cámaras disponibles y cámara actual al montar
   useEffect(() => {
@@ -23,6 +26,7 @@ export function useCameras(setTelemetry, onSelected) {
   }, [setTelemetry]);
 
   const requestSelect = async (camera, networkErrorMessage) => {
+    setSelectError(null);
     try {
       const response = await fetch(`${API_BASE}/api/cameras/select`, {
         method: "POST",
@@ -36,9 +40,9 @@ export function useCameras(setTelemetry, onSelected) {
         return;
       }
       const error = await response.json();
-      setTelemetry(prev => ({ ...prev, camera_error: error.detail }));
+      setSelectError(typeof error.detail === "string" ? error.detail : "No se pudo cambiar la cámara");
     } catch {
-      setTelemetry(prev => ({ ...prev, camera_error: networkErrorMessage }));
+      setSelectError(networkErrorMessage);
     }
   };
 
@@ -72,5 +76,15 @@ export function useCameras(setTelemetry, onSelected) {
     }
   };
 
-  return { availableCameras, testingCamera, selectLocalCamera, selectIpCamera, refreshCameras };
+  const clearSelectError = () => setSelectError(null);
+
+  return {
+    availableCameras,
+    testingCamera,
+    selectError,
+    clearSelectError,
+    selectLocalCamera,
+    selectIpCamera,
+    refreshCameras
+  };
 }
