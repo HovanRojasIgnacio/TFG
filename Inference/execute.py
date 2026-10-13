@@ -1,4 +1,7 @@
 import os
+import venv_bootstrap
+if __name__ == "__main__":
+    venv_bootstrap.ensure_venv()  # Usa Inference/.venv (PyTorch con CUDA) aunque se lance con otro Python
 # Ultralytics no debe instalar paquetes por su cuenta con pip (puede modificar el Python global)
 os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 import logging
