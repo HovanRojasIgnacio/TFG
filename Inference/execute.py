@@ -52,6 +52,7 @@ _camera_cache = {"cameras": [], "last_update": 0}
 _camera_cache_lock = threading.Lock()
 CAMERA_CACHE_TTL = 10.0  # Cache for 10 seconds
 ALLOWED_IP_SCHEMES = ("http://", "https://", "rtsp://")  # Esquemas admitidos para cámaras IP
+VIEWER_TIMEOUT = 2.0  # Segundos sin pedir frames tras los que se deja de codificar el stream
 RECONNECT_MIN_DELAY = 2.0 # Espera inicial entre reintentos de conexión (s)
 RECONNECT_MAX_DELAY = 15.0  # Espera máxima entre reintentos (s)
 
@@ -168,6 +169,7 @@ class VideoPipeline:
         
         self.latest_encoded_frame = None
         self.frame_id: int = 0  # Se incrementa con cada frame nuevo codificado
+        self.last_viewer_time: float = 0.0  # Última vez que un cliente pidió un frame del stream
         self.lock = threading.Lock()
         self.is_running = True
         self.camera_source: Optional[CameraSource] = CameraSource(type="local", index=0, name="Cámara Local 0")
@@ -390,11 +392,16 @@ class VideoPipeline:
                     "details": f"Infracción detectada: {current_counts['no_helmet']} operario(s) sin protección."
                 })
 
-            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ret:
+            # El JPEG solo se codifica si alguien está viendo el stream (ahorra CPU)
+            if time.time() - self.last_viewer_time < VIEWER_TIMEOUT:
+                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ret:
+                    with self.lock:
+                        self.latest_encoded_frame = buffer.tobytes()
+                        self.frame_id += 1
+            elif self.latest_encoded_frame is not None:
                 with self.lock:
-                    self.latest_encoded_frame = buffer.tobytes()
-                    self.frame_id += 1
+                    self.latest_encoded_frame = None  # Evita mostrar un frame antiguo al reconectar
 
         if self._cap:
             self._cap.release()
@@ -480,6 +487,7 @@ def get_stats(request: Request):
 def stream_generator():
     last_id = -1
     while True:
+        pipeline.last_viewer_time = time.time()
         with pipeline.lock:
             frame_bytes = pipeline.latest_encoded_frame
             frame_id = pipeline.frame_id
