@@ -62,7 +62,8 @@ model.predict(warmup_frame, device=device, conf=0.325, half=use_half, verbose=Fa
 _camera_cache = {"cameras": [], "last_update": 0}
 _camera_cache_lock = threading.Lock()
 CAMERA_CACHE_TTL = 10.0  # Cache for 10 seconds
-RECONNECT_MIN_DELAY = 2.0   # Espera inicial entre reintentos de conexión (s)
+ALLOWED_IP_SCHEMES = ("http://", "https://", "rtsp://")  # Esquemas admitidos para cámaras IP
+RECONNECT_MIN_DELAY = 2.0  # Espera inicial entre reintentos de conexión (s)
 RECONNECT_MAX_DELAY = 15.0  # Espera máxima entre reintentos (s)
 
 
@@ -447,6 +448,16 @@ def refresh_cameras():
 @app.post("/api/cameras/select")
 def select_camera(payload: CameraSelect):
     """Switch to a different camera source."""
+    if payload.type == "ip":
+        # Solo protocolos de red: evita que OpenCV abra rutas de archivo locales u otros esquemas
+        if not payload.url or not payload.url.strip().lower().startswith(ALLOWED_IP_SCHEMES):
+            raise HTTPException(status_code=400, detail="La URL de la cámara IP debe empezar por http://, https:// o rtsp://")
+    elif payload.type == "local":
+        if payload.index is None or payload.index < 0:
+            raise HTTPException(status_code=400, detail="Índice de cámara local no válido")
+    else:
+        raise HTTPException(status_code=400, detail="Tipo de cámara no válido (use 'local' o 'ip')")
+
     source = CameraSource(**payload.model_dump())
     if pipeline.set_camera(source):
         return {"status": "success", "camera": pipeline.get_camera_info(probe=False)["current"]}
