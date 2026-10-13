@@ -1,0 +1,76 @@
+import { useState, useEffect } from 'react';
+import { API_BASE } from '../config';
+
+/**
+ * Lista de cámaras locales y selección de fuente de vídeo (local o IP).
+ * `onSelected` se llama cuando el backend acepta el cambio de cámara.
+ */
+export function useCameras(setTelemetry, onSelected) {
+  const [availableCameras, setAvailableCameras] = useState([]);
+  const [testingCamera, setTestingCamera] = useState(false);
+
+  // Cámaras disponibles y cámara actual al montar
+  useEffect(() => {
+    fetch(`${API_BASE}/api/cameras`)
+      .then(res => res.json())
+      .then(data => {
+        setAvailableCameras(data.available_local || []);
+        if (data.current) {
+          setTelemetry(prev => ({ ...prev, camera: data.current, camera_error: data.error }));
+        }
+      })
+      .catch(console.error);
+  }, [setTelemetry]);
+
+  const requestSelect = async (camera, networkErrorMessage) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/cameras/select`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(camera)
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setTelemetry(prev => ({ ...prev, camera: data.camera, camera_error: null }));
+        onSelected();
+        return;
+      }
+      const error = await response.json();
+      setTelemetry(prev => ({ ...prev, camera_error: error.detail }));
+    } catch {
+      setTelemetry(prev => ({ ...prev, camera_error: networkErrorMessage }));
+    }
+  };
+
+  const selectLocalCamera = (index) => {
+    const camera = availableCameras.find(c => c.index === index);
+    if (camera) {
+      requestSelect({ type: "local", index: camera.index, name: camera.name }, "Error de conexión al cambiar cámara");
+    }
+  };
+
+  const selectIpCamera = async (url, name) => {
+    if (!url.trim()) return;
+    setTestingCamera(true);
+    try {
+      await requestSelect(
+        { type: "ip", url: url.trim(), name: name.trim() || "Cámara IP" },
+        "Error de conexión al probar cámara IP"
+      );
+    } finally {
+      setTestingCamera(false);
+    }
+  };
+
+  const refreshCameras = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/cameras?refresh=true`);
+      const data = await response.json();
+      setAvailableCameras(data.available_local || []);
+    } catch (error) {
+      console.error("Error refreshing cameras:", error);
+    }
+  };
+
+  return { availableCameras, testingCamera, selectLocalCamera, selectIpCamera, refreshCameras };
+}
