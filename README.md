@@ -34,12 +34,12 @@ En la primera terminal de comandos, accede al directorio del backend para instal
 ```bash
 cd Inference
 
-# (Recomendado) entorno virtual propio
+# Entorno virtual: el servidor lo usa solo, aunque lo arranques con otro Python
 python -m venv .venv
 .venv\Scripts\activate
 
-# IMPORTANTE: instalar PyTorch con CUDA ANTES que el resto. El `pip install torch` normal
-# instala la versión solo-CPU y toda la inferencia (y la carga del procesador) iría a la CPU.
+# IMPORTANTE: instalar PyTorch con CUDA ANTES que el resto. El `pip install torch` normal instala
+# la versión solo-CPU, y el servidor NO arranca sin GPU NVIDIA (no existe modo CPU).
 pip install torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytorch.org/whl/cu130
 
 # Instalar el resto de librerías de Python
@@ -48,17 +48,22 @@ pip install -r requirements.txt
 # Comprobar que la GPU está disponible (debe imprimir True y el nombre de la tarjeta)
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 
-# (Opcional, recomendado) Motor TensorRT: unas 3 veces más rápido que best.pt en FP16
-# (4 ms frente a 11 ms por fotograma en una RTX 5060). Genera best.onnx y best.engine.
-# El motor depende de tu GPU y de la versión de TensorRT, por eso no se sube a git.
+# (Recomendado) TensorRT: unas 3 veces más rápido que best.pt en FP16 (4 ms frente a 11 ms por fotograma
+# en una RTX 5060). No hay que generar el motor a mano: al arrancar, si falta best.engine, o no es
+# compatible con tu GPU o con tu versión de TensorRT, el servidor lo genera solo (aprox. 1 minuto).
+# Sin TensorRT instalado, el servidor usa best.pt en la GPU.
 pip install -r requirements-tensorrt.txt
+# (Opcional) generar best.engine y best.onnx antes de arrancar:
 python export.py
-# Si no hay motor, el servidor usa best.pt en la GPU; si la exportación TensorRT falla se conserva el .onnx.
 
 # (Opcional) Medir latencia y FPS de inferencia del modelo (sin cámara):
 python benchmark.py
 
-# Arrancar el servidor backend
+# (Opcional) Comparar la precisión de best.pt y del motor con TU conjunto de validación
+# (el dataset.yaml con el que se entrenó; mAP, precisión y recall por clase):
+python validate_model.py --data ruta\a\yolo_dataset\dataset.yaml
+
+# Arrancar el servidor backend (usa Inference/.venv automáticamente, con cualquier Python)
 python execute.py
 ```
 El motor de IA se levantará y transmitirá el flujo de vídeo en: http://localhost:8000
