@@ -7,14 +7,12 @@ import time
 import threading
 from collections import deque
 from typing import Dict, List, Optional, Union
-import numpy as np
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from ultralytics import YOLO
-from runtime import precision_kwargs, select_runtime
+from runtime import load_model, precision_kwargs
 
 # Evita el error de Windows "OpenMP runtime already initialized" cuando torch, numpy y
 # OpenCV cargan cada uno su propia copia de libiomp (workaround habitual).
@@ -40,14 +38,10 @@ os.makedirs(infractions_dir, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Selección de dispositivo y modelo: GPU siempre que sea posible (véase runtime.py)
-weights_path, device, use_half = select_runtime(current_dir)
+# Modelo en la GPU (solo GPU): motor TensorRT, generado automáticamente si hace falta, o best.pt.
+# load_model() ya hace una inferencia de prueba, que sirve de warm-up (véase runtime.py)
+model, (weights_path, device, use_half) = load_model(current_dir)
 logger.info("Modelo: %s | dispositivo: %s | FP16: %s", os.path.basename(weights_path), device, use_half)
-model = YOLO(weights_path, task="detect")
-
-# Warm-up inicial
-warmup_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-model.predict(warmup_frame, device=device, conf=0.325, verbose=False, **precision_kwargs(use_half))
 
 # Camera detection cache
 _camera_cache = {"cameras": [], "last_update": 0}

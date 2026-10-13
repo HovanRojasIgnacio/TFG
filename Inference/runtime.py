@@ -1,29 +1,46 @@
-"""Selección de dispositivo y de pesos del modelo, compartida por execute.py y benchmark.py.
+"""Carga del modelo en la GPU, compartida por execute.py y benchmark.py. Solo GPU: no hay modo CPU.
 
-Prioridad: usar la GPU siempre que sea posible.
-  - Con CUDA:  best.engine (TensorRT) > best.pt (PyTorch en FP16) > best.onnx (solo si ONNX Runtime tiene CUDA)
-  - Sin CUDA:  best.onnx > best.pt   (best.engine necesita GPU)
+Orden de preferencia (siempre en la GPU NVIDIA):
+  1. best.engine (TensorRT). Si no existe, o no se puede cargar (otra GPU, otra versión de
+     TensorRT...), se genera automáticamente a partir de best.pt (tarda aproximadamente un minuto).
+  2. best.pt (PyTorch en FP16), si TensorRT no está instalado o la generación falla.
+  3. best.onnx, solo si ONNX Runtime tiene el proveedor CUDA.
 """
+import importlib.util
 import logging
 import os
+import shutil
+import tempfile
 from typing import NamedTuple
 
+import numpy as np
 import torch
 
 logger = logging.getLogger("guardwatch")
 
+IMGSZ = 640
+
 
 class Runtime(NamedTuple):
     weights_path: str
-    device: str      # dispositivo que se pasa a model.predict(): "cuda" o "cpu"
-    half: bool       # FP16 (solo con pesos .pt en GPU)
+    device: str      # siempre "cuda"
+    half: bool       # FP16 (solo con pesos .pt; un motor TensorRT ya lleva la precisión dentro)
+
+
+def require_cuda() -> None:
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            f"GuardWatch AI necesita una GPU NVIDIA con CUDA, pero este Python (torch {torch.__version__}) "
+            "no la ve. Instala PyTorch con CUDA (véase el README) y arranca el servidor con el entorno "
+            "virtual de Inference/.venv."
+        )
 
 
 def precision_kwargs(half: bool) -> dict:
-    """Argumentos de precisión para model.predict(), válidos en versiones nuevas y antiguas de Ultralytics.
+    """Argumentos de precisión para predict()/export(), válidos en versiones nuevas y antiguas de Ultralytics.
 
     Las versiones recientes sustituyen `half` por `quantize` y avisan en cada llamada si se usa `half`.
-    Con FP32 o con un motor TensorRT (la precisión ya va dentro del motor) no hace falta pasar nada.
+    Con FP32 o con un motor TensorRT no hace falta pasar nada.
     """
     if not half:
         return {}
@@ -36,6 +53,10 @@ def precision_kwargs(half: bool) -> dict:
     return {"half": True}
 
 
+def _tensorrt_available() -> bool:
+    return importlib.util.find_spec("tensorrt") is not None
+
+
 def _onnx_has_cuda() -> bool:
     try:
         import onnxruntime as ort
@@ -44,26 +65,78 @@ def _onnx_has_cuda() -> bool:
         return False
 
 
-def select_runtime(base_dir: str) -> Runtime:
-    engine, onnx, pt = (os.path.join(base_dir, f"best.{ext}") for ext in ("engine", "onnx", "pt"))
-    cuda = torch.cuda.is_available()
+def build_engine(base_dir: str) -> bool:
+    """Genera best.engine (TensorRT, FP16, formas dinámicas) a partir de best.pt. Devuelve True si lo logra.
 
-    if cuda:
-        candidates = [engine, pt] + ([onnx] if _onnx_has_cuda() else [])
-    else:
-        candidates = [onnx, pt]
-        logger.warning(
-            "CUDA no disponible: la inferencia se ejecutará en la CPU. "
-            "Instala PyTorch con CUDA (véase el README) para usar la GPU."
-        )
+    Se exporta en una carpeta temporal para no pisar el best.onnx que pueda haber junto a los pesos.
+    Las formas dinámicas son necesarias: un motor estático 640x640 cambia el relleno de la imagen y
+    pierde detecciones respecto a best.pt.
+    """
+    pt = os.path.join(base_dir, "best.pt")
+    engine = os.path.join(base_dir, "best.engine")
+    if not os.path.exists(pt):
+        logger.warning("No se puede generar el motor TensorRT: falta %s", pt)
+        return False
+    if not _tensorrt_available():
+        logger.warning("No se puede generar el motor TensorRT: TensorRT no está instalado "
+                       "(pip install -r requirements-tensorrt.txt)")
+        return False
 
-    for path in candidates:
-        if os.path.exists(path):
-            return Runtime(path, "cuda" if cuda else "cpu", cuda and path.endswith(".pt"))
+    from ultralytics import YOLO
+    logger.info("Generando el motor TensorRT para esta GPU (tarda aproximadamente un minuto)...")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_pt = os.path.join(tmp, "best.pt")
+            shutil.copy2(pt, tmp_pt)
+            built = YOLO(tmp_pt).export(format="engine", device=0, dynamic=True, batch=1,
+                                        imgsz=IMGSZ, **precision_kwargs(True))
+            staged = engine + ".tmp"
+            shutil.copy2(built, staged)
+            os.replace(staged, engine)
+    except Exception as e:
+        logger.warning("No se pudo generar el motor TensorRT: %s", e)
+        return False
+    logger.info("Motor TensorRT generado: %s", engine)
+    return True
 
-    # Último recurso: un .onnx sin soporte CUDA en ONNX Runtime solo puede ir en la CPU
-    if os.path.exists(onnx):
-        logger.warning("best.onnx se ejecutará en la CPU (ONNX Runtime sin CUDA). Usa best.pt o best.engine para la GPU.")
-        return Runtime(onnx, "cpu", False)
 
-    raise FileNotFoundError(f"No se encontró best.engine, best.onnx ni best.pt en {base_dir}")
+def _load(path: str):
+    """Carga los pesos y hace una inferencia de prueba para detectar motores incompatibles."""
+    from ultralytics import YOLO
+    model = YOLO(path, task="detect")
+    blank = np.zeros((480, 640, 3), dtype=np.uint8)
+    model.predict(blank, device="cuda", conf=0.325, verbose=False,
+                  **precision_kwargs(path.endswith(".pt")))
+    return model
+
+
+def load_model(base_dir: str):
+    """Devuelve (modelo, Runtime) con el mejor formato disponible para la GPU."""
+    require_cuda()
+    engine, pt, onnx = (os.path.join(base_dir, f"best.{ext}") for ext in ("engine", "pt", "onnx"))
+
+    if not os.path.exists(engine):
+        build_engine(base_dir)
+
+    if os.path.exists(engine):
+        try:
+            return _load(engine), Runtime(engine, "cuda", False)
+        except Exception as e:
+            logger.warning("El motor TensorRT no se pudo cargar (¿otra GPU o versión de TensorRT?): %s", e)
+            if build_engine(base_dir):
+                try:
+                    return _load(engine), Runtime(engine, "cuda", False)
+                except Exception as e2:
+                    logger.warning("El motor regenerado tampoco se pudo cargar: %s", e2)
+
+    if os.path.exists(pt):
+        logger.info("Usando best.pt en la GPU (FP16).")
+        return _load(pt), Runtime(pt, "cuda", True)
+
+    if os.path.exists(onnx) and _onnx_has_cuda():
+        logger.info("Usando best.onnx en la GPU (ONNX Runtime CUDA).")
+        return _load(onnx), Runtime(onnx, "cuda", False)
+
+    raise FileNotFoundError(
+        f"No hay pesos utilizables en {base_dir}: se necesita best.pt (o best.engine) y una GPU con CUDA."
+    )

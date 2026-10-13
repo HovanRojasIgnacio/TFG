@@ -14,9 +14,8 @@ import time
 import cv2
 import numpy as np
 import torch
-from ultralytics import YOLO
 
-from runtime import precision_kwargs, select_runtime
+from runtime import load_model, precision_kwargs
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -52,11 +51,9 @@ def main():
     parser.add_argument("--conf", type=float, default=0.325)
     args = parser.parse_args()
 
-    # Misma selección que execute.py: GPU siempre que sea posible
-    weights, device, half = select_runtime(current_dir)
-    model = YOLO(weights, task="detect")
-    gpu_name = torch.cuda.get_device_name(0) if device == "cuda" else "-"
-    print(f"Modelo: {os.path.basename(weights)} | Dispositivo: {device} ({gpu_name}) | half={half}")
+    # Misma carga que execute.py (solo GPU; genera el motor TensorRT si falta)
+    model, (weights, device, half) = load_model(current_dir)
+    print(f"Modelo: {os.path.basename(weights)} | Dispositivo: {device} ({torch.cuda.get_device_name(0)}) | half={half}")
 
     latencies = []
     for i, frame in enumerate(frame_source(args.source, args.warmup + args.frames)):
