@@ -1,0 +1,7 @@
+fastapi==0.136.3
+uvicorn==0.48.0
+ultralytics==8.4.23
+opencv-python==4.13.0.92
+torch==2.12.0
+numpy==2.4.3
+pydantic==2.13.4
