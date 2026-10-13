@@ -465,6 +465,10 @@ input:checked + .slider-switch:before {
   color: var(--text-muted);
 }
 
+.modal-content:focus {
+  outline: none;
+}
+
 .modal-close:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 2px;
