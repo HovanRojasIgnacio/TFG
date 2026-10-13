@@ -31,21 +31,49 @@ function App() {
 
   const audioCtxRef = useRef(null);
   const lastBeepRef = useRef(0);
+  const modalRef = useRef(null);
   const confTimerRef = useRef(null);
 
   useEffect(() => () => clearTimeout(confTimerRef.current), []);
 
-  // Escape cierra cualquier modal abierto
+  // Modal abierto: el foco entra en el diálogo, Tab queda atrapado dentro, Escape lo cierra
+  // y al cerrarse el foco vuelve al elemento que lo abrió
   useEffect(() => {
     if (!activeModalImg && !cameraModalOpen) return;
+    const opener = document.activeElement;
+    const modal = modalRef.current;
+    modal?.focus();
+
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
         setActiveModalImg(null);
         setCameraModalOpen(false);
+        return;
+      }
+      if (e.key !== 'Tab' || !modal) return;
+
+      const focusable = modal.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]'
+      );
+      if (focusable.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === modal)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
       }
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      opener?.focus?.();
+    };
   }, [activeModalImg, cameraModalOpen]);
 
   // Inicializa o reanuda AudioContext tras interacción
@@ -416,7 +444,7 @@ function App() {
 
       {activeModalImg && (
         <div className="modal-overlay" onClick={() => setActiveModalImg(null)}>
-          <div className="modal-content" role="dialog" aria-modal="true" aria-label="Evidencia de infracción" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content" ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Evidencia de infracción" onClick={(e) => e.stopPropagation()}>
             <button type="button" className="modal-close" aria-label="Cerrar" onClick={() => setActiveModalImg(null)}>×</button>
             <img src={activeModalImg} alt="Evidencia Detallada" />
             <div className="modal-meta">Evidencia Forense — Captura de fotograma procesada por el motor de inferencia</div>
@@ -426,7 +454,7 @@ function App() {
 
       {cameraModalOpen && (
         <div className="modal-overlay" onClick={() => setCameraModalOpen(false)}>
-          <div className="modal-content camera-modal" role="dialog" aria-modal="true" aria-label="Seleccionar fuente de vídeo" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content camera-modal" ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Seleccionar fuente de vídeo" onClick={(e) => e.stopPropagation()}>
             <button type="button" className="modal-close" aria-label="Cerrar" onClick={() => setCameraModalOpen(false)}>×</button>
             <h3>Seleccionar Fuente de Vídeo</h3>
             
