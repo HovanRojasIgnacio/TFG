@@ -169,6 +169,7 @@ class VideoPipeline:
         self.latest_encoded_frame = None
         self.frame_id: int = 0  # Se incrementa con cada frame nuevo codificado
         self.last_viewer_time: float = 0.0  # Última vez que un cliente pidió un frame del stream
+        self.latency_window = deque(maxlen=100)  # ms desde que se lee un frame hasta que queda publicado
         self.lock = threading.Lock()
         self.is_running = True
         self.camera_source: Optional[CameraSource] = CameraSource(type="local", index=0, name="Cámara Local 0")
@@ -324,6 +325,7 @@ class VideoPipeline:
                 continue
 
             consecutive_failures = 0
+            frame_start = time.perf_counter()
 
             # For local cameras, flip horizontally (mirror effect)
             if current_source.type == "local":
@@ -402,6 +404,8 @@ class VideoPipeline:
                 with self.lock:
                     self.latest_encoded_frame = None  # Evita mostrar un frame antiguo al reconectar
 
+            self.latency_window.append((time.perf_counter() - frame_start) * 1000)
+
         if self._cap:
             self._cap.release()
 
@@ -470,7 +474,14 @@ def get_stats(request: Request):
 
     camera_info = pipeline.get_camera_info(probe=False)
 
+    # Latencia de procesamiento del servidor: lectura del frame -> frame anotado y codificado (últimos 100 frames)
+    window = sorted(pipeline.latency_window)
+    processing_ms = round(sum(window) / len(window), 1) if window else 0.0
+    processing_p95_ms = round(window[int(0.95 * (len(window) - 1))], 1) if window else 0.0
+
     return {
+        "processing_ms": processing_ms,
+        "processing_p95_ms": processing_p95_ms,
         "fps": round(pipeline.fps, 1),
         "device": device.upper(),
         "weights_format": os.path.basename(weights_path).split('.')[-1].upper(),
