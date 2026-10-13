@@ -34,8 +34,19 @@ En la primera terminal de comandos, accede al directorio del backend para instal
 ```bash
 cd Inference
 
-# Instalar las librerías necesarias de Python
+# (Recomendado) entorno virtual propio
+python -m venv .venv
+.venv\Scripts\activate
+
+# IMPORTANTE: instalar PyTorch con CUDA ANTES que el resto. El `pip install torch` normal
+# instala la versión solo-CPU y toda la inferencia (y la carga del procesador) iría a la CPU.
+pip install torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytorch.org/whl/cu130
+
+# Instalar el resto de librerías de Python
 pip install -r requirements.txt
+
+# Comprobar que la GPU está disponible (debe imprimir True y el nombre de la tarjeta)
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 
 # (Opcional) Si quieres optimizar tu best.pt a formatos ultrarrápidos (.engine / .onnx):
 # Si la exportación a TensorRT falla, se conserva el .onnx y el servidor lo usará automáticamente.

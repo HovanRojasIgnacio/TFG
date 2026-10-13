@@ -1,3 +1,4 @@
+# Instala PyTorch con CUDA ANTES que este archivo (véase el README); si no, torch será la versión solo-CPU.
 fastapi==0.136.3
 uvicorn==0.48.0
 ultralytics==8.4.23
