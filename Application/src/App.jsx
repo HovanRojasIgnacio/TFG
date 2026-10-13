@@ -57,7 +57,10 @@ function App() {
             onToggleSound={toggleSound}
             camera={telemetry.camera}
             cameraError={telemetry.camera_error}
-            onOpenCameraModal={() => setCameraModalOpen(true)}
+            onOpenCameraModal={() => {
+              cameras.clearSelectError();
+              setCameraModalOpen(true);
+            }}
           />
           <MetricsCard
             isActive={isActive}
@@ -79,6 +82,7 @@ function App() {
           cameras={cameras.availableCameras}
           currentCamera={telemetry.camera}
           testing={cameras.testingCamera}
+          error={cameras.selectError}
           onRefresh={cameras.refreshCameras}
           onSelectLocal={cameras.selectLocalCamera}
           onSelectIp={cameras.selectIpCamera}

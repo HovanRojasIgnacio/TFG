@@ -5,6 +5,7 @@ export default function CameraModal({
   cameras,
   currentCamera,
   testing,
+  error,
   onRefresh,
   onSelectLocal,
   onSelectIp,
@@ -16,6 +17,12 @@ export default function CameraModal({
   return (
     <Modal label="Seleccionar fuente de vídeo" className="camera-modal" onClose={onClose}>
       <h3>Seleccionar Fuente de Vídeo</h3>
+
+      {error && (
+        <div className="camera-error" role="alert">
+          ⚠ {error}
+        </div>
+      )}
 
       <div className="camera-tab">
         <button
