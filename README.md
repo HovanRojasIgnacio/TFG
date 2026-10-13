@@ -98,3 +98,9 @@ python execute.py
 ```
 
 Las cámaras IP solo admiten URLs `http://`, `https://` o `rtsp://`.
+
+## Cumplimiento EPI y evidencias
+
+- **Cumplimiento EPI (%)** = cascos correctos / (cascos correctos + infracciones) × 100, calculado sobre las detecciones del fotograma actual. Los rostros neutros (`face`) no cuentan. Si no hay ninguna persona detectada, vale 100 %.
+- **Infracciones:** cuando hay al menos una infracción se guarda una captura anotada como máximo cada 4 segundos en `Inference/static/infractions/`. El panel muestra las 12 últimas; el registro en memoria conserva 100 y se pierde al reiniciar el backend.
+- **Espacio en disco:** las capturas no se borran automáticamente y crecen mientras haya infracciones. Elimina el contenido de `Inference/static/infractions/` cuando no necesites las evidencias.
