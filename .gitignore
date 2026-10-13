@@ -29,3 +29,6 @@ __pycache__/
 
 # Entorno virtual de Python
 .venv/
+
+# Motores TensorRT: dependen de la GPU y de la versión de TensorRT; se generan con export.py
+*.engine
