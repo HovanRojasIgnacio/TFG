@@ -26,3 +26,6 @@ dist-ssr
 # Python
 __pycache__/
 *.pyc
+
+# Entorno virtual de Python
+.venv/
