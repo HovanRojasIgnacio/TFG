@@ -5,6 +5,7 @@ import './App.css';
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 const ALARM_MIN_INTERVAL_MS = 1500;
 const CONF_DEBOUNCE_MS = 250;
+const STREAM_RETRY_MS = 3000;
 
 function App() {
   const [isActive, setIsActive] = useState(true);
@@ -35,6 +36,13 @@ function App() {
   const confTimerRef = useRef(null);
 
   useEffect(() => () => clearTimeout(confTimerRef.current), []);
+
+  // Si el stream falla (por ejemplo, el backend aún arranca), se reintenta solo mientras la monitorización esté activa
+  useEffect(() => {
+    if (!streamError || !isActive) return;
+    const timer = setTimeout(() => setStreamError(false), STREAM_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [streamError, isActive]);
 
   // Modal abierto: el foco entra en el diálogo, Tab queda atrapado dentro, Escape lo cierra
   // y al cerrarse el foco vuelve al elemento que lo abrió
@@ -293,7 +301,7 @@ function App() {
             ) : (
               <div className="viewport-placeholder">
                 <span className="placeholder-icon">📷</span>
-                <p>{streamError ? "Error al conectar con la señal del servidor." : "La monitorización está en pausa."}</p>
+                <p>{streamError ? "Error al conectar con la señal del servidor. Reintentando automáticamente…" : "La monitorización está en pausa."}</p>
                 {streamError && (
                   <button className="retry-btn" onClick={() => setStreamError(false)}>
                     Reintentar conexión
