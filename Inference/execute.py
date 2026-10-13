@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from ultralytics import YOLO
-from runtime import select_runtime
+from runtime import precision_kwargs, select_runtime
 
 # Evita el error de Windows "OpenMP runtime already initialized" cuando torch, numpy y
 # OpenCV cargan cada uno su propia copia de libiomp (workaround habitual).
@@ -47,7 +47,7 @@ model = YOLO(weights_path, task="detect")
 
 # Warm-up inicial
 warmup_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-model.predict(warmup_frame, device=device, conf=0.325, half=use_half, verbose=False)
+model.predict(warmup_frame, device=device, conf=0.325, verbose=False, **precision_kwargs(use_half))
 
 # Camera detection cache
 _camera_cache = {"cameras": [], "last_update": 0}
@@ -343,8 +343,8 @@ class VideoPipeline:
                 frame,
                 device=device,
                 conf=self.conf_threshold,
-                half=use_half,
-                verbose=False
+                verbose=False,
+                **precision_kwargs(use_half)
             )
 
             current_counts = {"helmet": 0, "no_helmet": 0, "face": 0}
