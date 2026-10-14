@@ -252,32 +252,42 @@ class LatestFrameReader:
             self._cond.notify_all()
 
 
-def _test_camera_connection(source: CameraSource, timeout: float = CAMERA_TEST_TIMEOUT) -> bool:
-    """Test camera connection with timeout."""
-    result = {"success": False}
+def _connect_camera(source: CameraSource, timeout: float = CAMERA_TEST_TIMEOUT):
+    """Abre la cámara y lee un frame para confirmar que funciona, con tiempo máximo.
 
-    def test():
+    Devuelve la cámara ya abierta (para que el pipeline la use sin volver a conectar: algunas
+    cámaras IP solo admiten una sesión y conectar dos veces duplica la espera) o None si falla.
+    """
+    result = {}
+    result_lock = threading.Lock()
+
+    def connect():
         cap = _open_capture(source)
+        ok = False
         try:
             if cap is not None and cap.isOpened():
-                # Try to read one frame to confirm it works
-                ret, _ = cap.read()
-                result["success"] = ret
+                ok, _ = cap.read()
         except Exception as e:
             logger.warning("Camera test failed: %s", e)
-        finally:
-            if cap is not None:
-                cap.release()
+        with result_lock:
+            if ok and not result.get("abandoned"):
+                result["cap"] = cap
+                return
+        # Fallo, o la prueba ya se dio por perdida: nadie más va a usar esta cámara
+        if cap is not None:
+            cap.release()
 
-    thread = threading.Thread(target=test, daemon=True)
+    thread = threading.Thread(target=connect, daemon=True)
     thread.start()
     thread.join(timeout=timeout)
 
+    with result_lock:
+        if "cap" in result:
+            return result["cap"]
+        result["abandoned"] = True
     if thread.is_alive():
         logger.warning("Camera connection test timed out after %ss", timeout)
-        return False
-
-    return result["success"]
+    return None
 
 
 class VideoPipeline:
@@ -300,6 +310,7 @@ class VideoPipeline:
         self.camera_error: Optional[str] = None
         self._cap = None
         self._camera_lock = threading.Lock()
+        self._handover = None  # (fuente, cámara ya abierta) que set_camera deja para el bucle
         
         self.thread = threading.Thread(target=self._process_stream, daemon=True)
         self.thread.start()
@@ -316,14 +327,19 @@ class VideoPipeline:
             return True
 
         # La prueba (con tiempo máximo) se hace fuera del lock para no bloquear el bucle de captura
-        if not _test_camera_connection(source):
+        cap = _connect_camera(source)
+        if cap is None:
             return False
 
         with self._camera_lock:
-            # El hilo de proceso detecta el cambio, libera la cámara anterior y abre la nueva
+            # El hilo de proceso detecta el cambio, libera la cámara anterior y usa la ya abierta
+            replaced = self._handover
+            self._handover = (source, cap)
             self.camera_source = source
             self.camera_error = None
-            return True
+        if replaced is not None:
+            replaced[1].release()  # Otro cambio anterior que el bucle aún no había recogido
+        return True
 
     def get_camera_info(self, force_refresh: bool = False, probe: bool = True) -> Dict:
         """Get current camera info and available cameras.
@@ -371,11 +387,22 @@ class VideoPipeline:
             # abrir una cámara IP puede tardar segundos y el lock no debe bloquear a set_camera
             with self._camera_lock:
                 requested = self.camera_source
+                handover, self._handover = self._handover, None
             if requested != current_source:
                 current_source = requested
                 self._release_cap()
                 next_retry = 0.0
                 retry_delay = RECONNECT_MIN_DELAY
+            if handover is not None:
+                source, cap = handover
+                if source is current_source:
+                    self._cap = LatestFrameReader(cap) if source.type == "ip" else cap
+                    self.camera_error = None
+                    logger.info("Camera connected: %s", _source_label(source))
+                    last_frame_time = time.time()
+                    prev_time = time.time()
+                else:
+                    cap.release()
 
             if not self._cap or not self._cap.isOpened():
                 # Sin cámara abierta (arranque, cambio, fallo o desconexión): reintento con espera creciente
