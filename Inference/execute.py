@@ -8,6 +8,9 @@ if __name__ == "__main__":
     venv_bootstrap.ensure_venv()  # Usa Inference/.venv (PyTorch con CUDA) aunque se lance con otro Python
 # Ultralytics no debe instalar paquetes por su cuenta con pip (puede modificar el Python global)
 os.environ.setdefault("YOLO_AUTOINSTALL", "False")
+# RTSP por TCP: FFmpeg usa UDP por defecto y, por Wi-Fi, los paquetes perdidos dan frames
+# corruptos o grises. Se puede cambiar con la variable de entorno (p. ej. "rtsp_transport;udp")
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import logging
 import cv2
 import time

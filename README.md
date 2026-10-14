@@ -116,7 +116,7 @@ $env:GUARDWATCH_HOST = "127.0.0.1"
 python execute.py
 ```
 
-Las cámaras IP solo admiten URLs `http://`, `https://` o `rtsp://`.
+Las cámaras IP solo admiten URLs `http://`, `https://` o `rtsp://`. Las cámaras RTSP se leen por TCP; para usar UDP, define `OPENCV_FFMPEG_CAPTURE_OPTIONS="rtsp_transport;udp"` antes de arrancar el backend.
 
 ## Cumplimiento EPI y evidencias
 
