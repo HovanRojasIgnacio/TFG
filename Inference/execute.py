@@ -385,6 +385,14 @@ class VideoPipeline:
                 cv2.imwrite(filepath, frame)
                 self.last_infraction_save = current_time
 
+                # El registro guarda las últimas 100; la imagen de la que sale se borra del disco
+                if len(self.infractions_log) == self.infractions_log.maxlen:
+                    evicted = os.path.basename(self.infractions_log[0]["image_path"])
+                    try:
+                        os.remove(os.path.join(infractions_dir, evicted))
+                    except OSError as e:
+                        logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
+
                 self.infractions_log.append({
                     "id": int(current_time * 1000),
                     "timestamp": time.strftime("%H:%M:%S", time.localtime(current_time)),
