@@ -704,3 +704,11 @@ input:checked + .slider-switch:before {
   opacity: 0.6;
   cursor: not-allowed;
 }
+.connection-banner {
+  padding: 0.6rem 1rem;
+  background-color: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 0.9rem;
+}

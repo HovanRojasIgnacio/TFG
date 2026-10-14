@@ -15,10 +15,14 @@ const INITIAL_TELEMETRY = {
 
 /**
  * Consulta /api/stats periódicamente mientras `isActive` sea true.
+ * Cada consulta espera a que termine la anterior, así no se acumulan peticiones si el
+ * backend va lento ni una respuesta antigua pisa a una más reciente.
  * `onStats(data)` se llama con cada respuesta (siempre con la última versión de la función).
+ * `online` es null hasta la primera respuesta y false si la última consulta falló.
  */
 export function useTelemetry(isActive, onStats) {
   const [telemetry, setTelemetry] = useState(INITIAL_TELEMETRY);
+  const [online, setOnline] = useState(null);
 
   const onStatsRef = useRef(onStats);
   useEffect(() => {
@@ -28,28 +32,37 @@ export function useTelemetry(isActive, onStats) {
   useEffect(() => {
     if (!isActive) return;
 
-    const interval = setInterval(() => {
-      fetch(`${API_BASE}/api/stats`)
-        .then(res => {
-          if (!res.ok) throw new Error("Error en servidor");
-          return res.json();
-        })
-        .then(data => {
-          setTelemetry(prev => ({
-            ...prev,
-            ...data,
-            active_detections: data.active_detections || prev.active_detections,
-            infractions: Array.isArray(data.infractions) ? data.infractions : prev.infractions
-          }));
-          onStatsRef.current?.(data);
-        })
-        .catch(() => {
-          // El backend puede estar reconectando
-        });
-    }, POLL_INTERVAL_MS);
+    const controller = new AbortController();
+    let timer;
 
-    return () => clearInterval(interval);
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/stats`, { signal: controller.signal });
+        if (!res.ok) throw new Error("Error en servidor");
+        const data = await res.json();
+        setTelemetry(prev => ({
+          ...prev,
+          ...data,
+          active_detections: data.active_detections || prev.active_detections,
+          infractions: Array.isArray(data.infractions) ? data.infractions : prev.infractions
+        }));
+        setOnline(true);
+        onStatsRef.current?.(data);
+      } catch {
+        if (controller.signal.aborted) return;
+        setOnline(false);  // El backend puede estar arrancando o reconectando
+      }
+      if (!controller.signal.aborted) {
+        timer = setTimeout(poll, POLL_INTERVAL_MS);
+      }
+    };
+    poll();
+
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
   }, [isActive]);
 
-  return [telemetry, setTelemetry];
+  return [telemetry, setTelemetry, online];
 }
