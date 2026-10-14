@@ -18,7 +18,7 @@ function App() {
 
   const { soundEnabled, toggleSound, beep } = useAlarm();
 
-  const [telemetry, setTelemetry] = useTelemetry(isActive, (data) => {
+  const [telemetry, setTelemetry, backendOnline] = useTelemetry(isActive, (data) => {
     if (soundEnabled && data.active_detections?.no_helmet > 0) {
       beep();
     }
@@ -39,6 +39,12 @@ function App() {
         </div>
         <div className="header-badge">TRABAJO FIN DE GRADO</div>
       </header>
+
+      {isActive && backendOnline === false && (
+        <div className="connection-banner" role="alert">
+          ⚠ Sin conexión con el servidor de inferencia. Los datos mostrados pueden no estar actualizados; reintentando…
+        </div>
+      )}
 
       <main className="main-content">
         <VideoCard
