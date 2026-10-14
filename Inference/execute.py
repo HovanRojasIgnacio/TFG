@@ -73,6 +73,10 @@ ALLOWED_IP_SCHEMES = ("http://", "https://", "rtsp://")  # Esquemas admitidos pa
 VIEWER_TIMEOUT = 2.0  # Segundos sin pedir frames tras los que se deja de codificar el stream
 RECONNECT_MIN_DELAY = 2.0 # Espera inicial entre reintentos de conexión (s)
 RECONNECT_MAX_DELAY = 15.0  # Espera máxima entre reintentos (s)
+IP_OPEN_TIMEOUT_MS = 5000  # Tiempo máximo para conectar con una cámara IP
+IP_READ_TIMEOUT_MS = 5000  # Tiempo máximo esperando un frame de una cámara IP
+CAMERA_TEST_TIMEOUT = (IP_OPEN_TIMEOUT_MS + IP_READ_TIMEOUT_MS) / 1000 + 1  # Prueba al cambiar de cámara (s)
+FRAME_FAIL_TIMEOUT = 2.0  # Segundos sin frames válidos tras los que se da la cámara por desconectada
 
 
 def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
@@ -142,36 +146,55 @@ class CameraSource(BaseModel):
     name: Optional[str] = None
 
 
-def _test_camera_connection(source: CameraSource, timeout: float = 5.0) -> bool:
+def _open_capture(source: CameraSource):
+    """Abre la cámara indicada. Devuelve el VideoCapture (abierto o no) o None si falla.
+
+    Las cámaras IP se abren con FFmpeg y tiempos máximos explícitos: sin ellos, una URL que no
+    responde bloquea unos 30 s en FFmpeg y después OpenCV prueba otros backends (hasta ~2 min).
+    """
+    try:
+        if source.type == "local":
+            cap = cv2.VideoCapture(source.index, cv2.CAP_DSHOW)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        elif source.type == "ip":
+            cap = cv2.VideoCapture(source.url, cv2.CAP_FFMPEG, [
+                cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, IP_OPEN_TIMEOUT_MS,
+                cv2.CAP_PROP_READ_TIMEOUT_MSEC, IP_READ_TIMEOUT_MS,
+            ])
+        else:
+            return None
+        return cap
+    except Exception as e:
+        logger.error("Failed to open camera: %s", e)
+        return None
+
+
+def _test_camera_connection(source: CameraSource, timeout: float = CAMERA_TEST_TIMEOUT) -> bool:
     """Test camera connection with timeout."""
     result = {"success": False}
-    
+
     def test():
+        cap = _open_capture(source)
         try:
-            if source.type == "local":
-                cap = cv2.VideoCapture(source.index, cv2.CAP_DSHOW)
-            elif source.type == "ip":
-                cap = cv2.VideoCapture(source.url)
-            else:
-                return
-            
-            if cap.isOpened():
+            if cap is not None and cap.isOpened():
                 # Try to read one frame to confirm it works
                 ret, _ = cap.read()
                 result["success"] = ret
-            cap.release()
         except Exception as e:
             logger.warning("Camera test failed: %s", e)
-            result["success"] = False
-    
+        finally:
+            if cap is not None:
+                cap.release()
+
     thread = threading.Thread(target=test, daemon=True)
     thread.start()
     thread.join(timeout=timeout)
-    
+
     if thread.is_alive():
         logger.warning("Camera connection test timed out after %ss", timeout)
         return False
-    
+
     return result["success"]
 
 
@@ -210,8 +233,8 @@ class VideoPipeline:
         if self._same_source(source, self.camera_source):
             return True
 
-        # La prueba (hasta 5 s) se hace fuera del lock para no bloquear el bucle de captura
-        if not _test_camera_connection(source, timeout=5.0):
+        # La prueba (con tiempo máximo) se hace fuera del lock para no bloquear el bucle de captura
+        if not _test_camera_connection(source):
             return False
 
         with self._camera_lock:
@@ -246,63 +269,47 @@ class VideoPipeline:
             "error": self.camera_error
         }
 
-    def _open_camera(self, source: CameraSource):
-        """Open a camera based on source configuration."""
-        try:
-            if source.type == "local":
-                cap = cv2.VideoCapture(source.index, cv2.CAP_DSHOW)
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            elif source.type == "ip":
-                cap = cv2.VideoCapture(source.url)
-                # For IP cameras, try to set buffer size to reduce latency
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            else:
-                return None
-            return cap
-        except Exception as e:
-            logger.error("Failed to open camera: %s", e)
-            return None
+    def _release_cap(self):
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+            self._cap = None
 
     def _process_stream(self):
         prev_time = time.time()
         current_source = self.camera_source
-        consecutive_failures = 0
+        last_frame_time = time.time()
         next_retry = 0.0
         retry_delay = RECONNECT_MIN_DELAY
 
         while self.is_running:
-            # Check if camera source changed
+            # Cambio de cámara pedido desde la API. La nueva se abre más abajo, fuera del lock:
+            # abrir una cámara IP puede tardar segundos y el lock no debe bloquear a set_camera
             with self._camera_lock:
-                if self.camera_source != current_source:
-                    current_source = self.camera_source
-                    if self._cap:
-                        try:
-                            self._cap.release()
-                        except:
-                            pass
-                    self._cap = self._open_camera(current_source)
-                    if not self._cap or not self._cap.isOpened():
-                        self.camera_error = f"No se pudo conectar a la cámara: {current_source.name or current_source.url}"
-                        self._cap = None
-                        consecutive_failures = 0
-                        time.sleep(1)
-                        continue
-                    self.camera_error = None
-                    prev_time = time.time()  # Reset timer on camera switch
-                    consecutive_failures = 0
+                requested = self.camera_source
+            if requested != current_source:
+                current_source = requested
+                self._release_cap()
+                next_retry = 0.0
+                retry_delay = RECONNECT_MIN_DELAY
 
             if not self._cap or not self._cap.isOpened():
-                # Sin cámara abierta (arranque, fallo o desconexión): reintento con espera creciente
+                # Sin cámara abierta (arranque, cambio, fallo o desconexión): reintento con espera creciente
                 if time.time() >= next_retry:
-                    cap = self._open_camera(current_source)
+                    cap = _open_capture(current_source)
+                    if self.camera_source != current_source:
+                        # Se cambió de cámara mientras se abría esta: se descarta
+                        if cap:
+                            cap.release()
+                        continue
                     if cap and cap.isOpened():
-                        with self._camera_lock:
-                            self._cap = cap
-                            self.camera_error = None
+                        self._cap = cap
+                        self.camera_error = None
                         logger.info("Camera connected: %s", current_source.name or current_source.url)
                         retry_delay = RECONNECT_MIN_DELAY
-                        consecutive_failures = 0
+                        last_frame_time = time.time()
                         prev_time = time.time()
                         continue
                     if cap:
@@ -325,25 +332,19 @@ class VideoPipeline:
                 frame = None
             
             if not success or frame is None:
-                consecutive_failures += 1
-                # If too many consecutive failures, release camera and wait longer
-                if consecutive_failures > 30:  # ~0.3 seconds of failures
-                    logger.warning("Too many consecutive frame read failures, releasing camera")
-                    try:
-                        self._cap.release()
-                    except:
-                        pass
-                    self._cap = None
+                # Por tiempo y no por número de fallos: en una cámara IP cada lectura fallida
+                # puede tardar hasta IP_READ_TIMEOUT_MS
+                if time.time() - last_frame_time > FRAME_FAIL_TIMEOUT:
+                    logger.warning("No frames for %.0fs, releasing camera", FRAME_FAIL_TIMEOUT)
+                    self._release_cap()
                     self.camera_error = "Error de lectura de cámara - cámara desconectada"
-                    consecutive_failures = 0
                     retry_delay = RECONNECT_MIN_DELAY
                     next_retry = time.time() + retry_delay  # Se reintenta automáticamente
-                    time.sleep(2)
                 else:
                     time.sleep(0.01)
                 continue
 
-            consecutive_failures = 0
+            last_frame_time = time.time()
             frame_start = time.perf_counter()
 
             # For local cameras, flip horizontally (mirror effect)
