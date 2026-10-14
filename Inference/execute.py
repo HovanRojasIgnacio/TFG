@@ -198,6 +198,60 @@ def _open_capture(source: CameraSource):
         return None
 
 
+class LatestFrameReader:
+    """Lee una cámara IP en su propio hilo y conserva solo el último frame.
+
+    FFmpeg ignora CAP_PROP_BUFFERSIZE: si la inferencia va más lenta que la cámara, los frames se
+    acumulan en su búfer y el vídeo se retrasa cada vez más. Leyendo sin pausa en otro hilo, el
+    bucle de inferencia siempre procesa el frame más reciente y descarta los intermedios.
+    Ofrece la misma interfaz que cv2.VideoCapture que usa el bucle (isOpened, read, release).
+    """
+
+    def __init__(self, cap):
+        self._cap = cap
+        self._cond = threading.Condition()
+        self._frame = None
+        self._seq = 0        # Frames leídos de la cámara
+        self._consumed = 0   # Último frame entregado al bucle
+        self._stopped = False
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        try:
+            while not self._stopped:
+                ok, frame = self._cap.read()
+                if not ok:
+                    # El bucle da la cámara por desconectada si no llegan frames en FRAME_FAIL_TIMEOUT
+                    time.sleep(0.01)
+                    continue
+                with self._cond:
+                    self._frame = frame
+                    self._seq += 1
+                    self._cond.notify_all()
+        except Exception as e:
+            logger.error("IP camera reader failed: %s", e)
+        finally:
+            # Se libera en este hilo para no cerrar la cámara a mitad de una lectura
+            self._cap.release()
+
+    def isOpened(self) -> bool:
+        return not self._stopped and self._cap.isOpened()
+
+    def read(self, timeout: float = 1.0):
+        """Devuelve el frame más reciente que aún no se ha entregado, esperando hasta `timeout` s."""
+        with self._cond:
+            self._cond.wait_for(lambda: self._seq != self._consumed or self._stopped, timeout)
+            if self._stopped or self._seq == self._consumed:
+                return False, None
+            self._consumed = self._seq
+            return True, self._frame
+
+    def release(self):
+        with self._cond:
+            self._stopped = True
+            self._cond.notify_all()
+
+
 def _test_camera_connection(source: CameraSource, timeout: float = CAMERA_TEST_TIMEOUT) -> bool:
     """Test camera connection with timeout."""
     result = {"success": False}
@@ -333,7 +387,7 @@ class VideoPipeline:
                             cap.release()
                         continue
                     if cap and cap.isOpened():
-                        self._cap = cap
+                        self._cap = LatestFrameReader(cap) if current_source.type == "ip" else cap
                         self.camera_error = None
                         logger.info("Camera connected: %s", _source_label(current_source))
                         retry_delay = RECONNECT_MIN_DELAY
