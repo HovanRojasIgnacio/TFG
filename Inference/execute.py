@@ -46,6 +46,25 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 model, (weights_path, device, use_half) = load_model(current_dir)
 logger.info("Modelo: %s | dispositivo: %s | FP16: %s", os.path.basename(weights_path), device, use_half)
 
+
+def _class_category(class_name: str) -> str:
+    """Agrupa una clase del modelo en una de las tres categorías del panel."""
+    name = class_name.lower()
+    if "no_helmet" in name or name == "head":
+        return "no_helmet"
+    if "with_helmet" in name or name == "helmet":
+        return "helmet"
+    return "face"
+
+
+# Se calcula una vez al arrancar, no por cada caja de cada frame
+CLASS_CATEGORIES = {class_id: _class_category(name) for class_id, name in model.names.items()}
+BOX_STYLES = {  # Color BGR y texto de la etiqueta
+    "no_helmet": ((0, 0, 255), "PELIGRO: Sin Casco"),
+    "helmet": ((0, 255, 0), "OK: Casco"),
+    "face": ((0, 165, 255), "Rostro"),  # naranja
+}
+
 # Camera detection cache
 _camera_cache = {"cameras": [], "last_update": 0}
 _camera_cache_lock = threading.Lock()
@@ -350,28 +369,18 @@ class VideoPipeline:
             highest_infraction_conf = 0.0
             boxes = results[0].boxes
 
-            for box in boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                conf = float(box.conf[0])
-                class_id = int(box.cls[0])
-                class_name = model.names[class_id].lower()
-
-                is_danger = "no_helmet" in class_name or class_name == "head"
-                is_safe = "with_helmet" in class_name or class_name == "helmet"
-
-                if is_danger:
-                    current_counts["no_helmet"] += 1
+            # Una sola copia GPU -> CPU por frame en lugar de tres por caja
+            for (x1, y1, x2, y2), conf, class_id in zip(boxes.xyxy.int().tolist(),
+                                                        boxes.conf.tolist(),
+                                                        boxes.cls.int().tolist()):
+                category = CLASS_CATEGORIES[class_id]
+                current_counts[category] += 1
+                if category == "no_helmet":
                     highest_infraction_conf = max(highest_infraction_conf, conf)
-                    color, label = (0, 0, 255), f"PELIGRO: Sin Casco ({conf:.2f})"
-                elif is_safe:
-                    current_counts["helmet"] += 1
-                    color, label = (0, 255, 0), f"OK: Casco ({conf:.2f})"
-                else:
-                    current_counts["face"] += 1
-                    color, label = (0, 165, 255), f"Rostro ({conf:.2f})"  # BGR: naranja
 
+                color, text = BOX_STYLES[category]
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, label, (x1, max(y1 - 10, 20)),
+                cv2.putText(frame, f"{text} ({conf:.2f})", (x1, max(y1 - 10, 20)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
             self.active_detections = current_counts
