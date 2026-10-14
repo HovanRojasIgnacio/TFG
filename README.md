@@ -116,10 +116,10 @@ $env:GUARDWATCH_HOST = "127.0.0.1"
 python execute.py
 ```
 
-Las cámaras IP solo admiten URLs `http://`, `https://` o `rtsp://`. Las cámaras RTSP se leen por TCP; para usar UDP, define `OPENCV_FFMPEG_CAPTURE_OPTIONS="rtsp_transport;udp"` antes de arrancar el backend.
+Las cámaras IP solo admiten URLs `http://`, `https://` o `rtsp://`. Si la URL lleva usuario y contraseña (`rtsp://usuario:clave@host/...`) o parámetros como `pwd=`, la API, el panel y el registro los muestran como `***`. Las cámaras RTSP se leen por TCP; para usar UDP, define `OPENCV_FFMPEG_CAPTURE_OPTIONS="rtsp_transport;udp"` antes de arrancar el backend.
 
 ## Cumplimiento EPI y evidencias
 
 - **Cumplimiento EPI (%)** = cascos correctos / (cascos correctos + infracciones) × 100, calculado sobre las detecciones del fotograma actual. Los rostros neutros (`face`) no cuentan. Si no hay ninguna persona detectada, vale 100 %.
-- **Infracciones:** cuando hay al menos una infracción se guarda una captura anotada como máximo cada 4 segundos en `Inference/static/infractions/`. El panel muestra las 12 últimas; el registro en memoria conserva 100 y se pierde al reiniciar el backend.
+- **Infracciones:** cuando hay al menos una infracción se guarda una captura anotada como máximo cada 4 segundos en `Inference/static/infractions/`. El panel muestra las 12 últimas; el registro en memoria conserva 100 y se pierde al reiniciar el backend. Cuando una infracción sale de ese registro, su captura se borra del disco (las de ejecuciones anteriores no se borran).
 - **Espacio en disco:** las capturas no se borran automáticamente y crecen mientras haya infracciones. Elimina el contenido de `Inference/static/infractions/` cuando no necesites las evidencias.
