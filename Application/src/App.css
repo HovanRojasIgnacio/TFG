@@ -6,6 +6,7 @@
   --text-muted: #94a3b8;
   --accent: #38bdf8;
   --danger: #ef4444;
+  --danger-text: #fca5a5; /* Texto rojo sobre el fondo rojo translúcido (contraste >= 4.5:1) */
   --success: #10b981;
   --warning: #f59e0b;
 }
@@ -527,7 +528,7 @@ input:checked + .slider-switch:before {
   background-color: rgba(239, 68, 68, 0.15);
   border: 1px solid rgba(239, 68, 68, 0.3);
   border-radius: 4px;
-  color: var(--danger);
+  color: var(--danger-text);
   font-size: 0.8rem;
 }
 
@@ -594,6 +595,7 @@ input:checked + .slider-switch:before {
   gap: 0.2rem;
   padding: 0.75rem;
   background-color: #0f172a;
+  color: var(--text-main);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   cursor: pointer;
@@ -709,6 +711,6 @@ input:checked + .slider-switch:before {
   background-color: rgba(239, 68, 68, 0.15);
   border: 1px solid rgba(239, 68, 68, 0.3);
   border-radius: 6px;
-  color: var(--danger);
+  color: var(--danger-text);
   font-size: 0.9rem;
 }
