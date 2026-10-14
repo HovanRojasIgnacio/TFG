@@ -24,7 +24,7 @@ function App() {
     }
   });
 
-  const handleConfidenceChange = useConfidence(setTelemetry);
+  const confidence = useConfidence(setTelemetry);
   const cameras = useCameras(setTelemetry, () => setCameraModalOpen(false));
 
   return (
@@ -51,8 +51,8 @@ function App() {
 
         <div className="right-panel">
           <ControlPanel
-            confThreshold={telemetry.conf_threshold}
-            onConfidenceChange={handleConfidenceChange}
+            confThreshold={confidence.pendingConf ?? telemetry.conf_threshold}
+            onConfidenceChange={confidence.onChange}
             soundEnabled={soundEnabled}
             onToggleSound={toggleSound}
             camera={telemetry.camera}
