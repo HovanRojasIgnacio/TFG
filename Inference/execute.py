@@ -1,4 +1,8 @@
 import os
+# Evita el error de Windows "OpenMP runtime already initialized" cuando torch, numpy y
+# OpenCV cargan cada uno su propia copia de libiomp (workaround habitual). Debe fijarse
+# antes de importar cualquiera de ellos.
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import venv_bootstrap
 if __name__ == "__main__":
     venv_bootstrap.ensure_venv()  # Usa Inference/.venv (PyTorch con CUDA) aunque se lance con otro Python
@@ -16,10 +20,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from runtime import load_model, precision_kwargs
-
-# Evita el error de Windows "OpenMP runtime already initialized" cuando torch, numpy y
-# OpenCV cargan cada uno su propia copia de libiomp (workaround habitual).
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("guardwatch")
