@@ -14,6 +14,7 @@ import time
 import threading
 from collections import deque
 from typing import Dict, List, Optional, Union
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -77,6 +78,28 @@ IP_OPEN_TIMEOUT_MS = 5000  # Tiempo máximo para conectar con una cámara IP
 IP_READ_TIMEOUT_MS = 5000  # Tiempo máximo esperando un frame de una cámara IP
 CAMERA_TEST_TIMEOUT = (IP_OPEN_TIMEOUT_MS + IP_READ_TIMEOUT_MS) / 1000 + 1  # Prueba al cambiar de cámara (s)
 FRAME_FAIL_TIMEOUT = 2.0  # Segundos sin frames válidos tras los que se da la cámara por desconectada
+
+
+SECRET_QUERY_KEYS = {"password", "passwd", "pass", "pwd", "token", "key", "auth"}
+
+
+def mask_url(url: Optional[str]) -> Optional[str]:
+    """Oculta usuario, contraseña y tokens de la URL de una cámara antes de mostrarla o registrarla.
+
+    La API responde a cualquier origen, así que las credenciales nunca salen del servidor.
+    """
+    if not url:
+        return url
+    try:
+        parts = urlsplit(url)
+        netloc = parts.netloc
+        if "@" in netloc:
+            netloc = "***@" + netloc.rsplit("@", 1)[1]
+        query = urlencode([(k, "***" if k.lower() in SECRET_QUERY_KEYS else v)
+                           for k, v in parse_qsl(parts.query, keep_blank_values=True)], safe="*")
+        return urlunsplit(parts._replace(netloc=netloc, query=query))
+    except ValueError:
+        return "URL no válida"
 
 
 def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
@@ -144,6 +167,11 @@ class CameraSource(BaseModel):
     index: Optional[int] = None
     url: Optional[str] = None
     name: Optional[str] = None
+
+
+def _source_label(source: CameraSource) -> str:
+    """Nombre de la cámara para mensajes y registros (sin credenciales)."""
+    return source.name or mask_url(source.url) or f"Cámara Local {source.index}"
 
 
 def _open_capture(source: CameraSource):
@@ -262,7 +290,7 @@ class VideoPipeline:
             "current": {
                 "type": self.camera_source.type,
                 "index": self.camera_source.index,
-                "url": self.camera_source.url,
+                "url": mask_url(self.camera_source.url),
                 "name": self.camera_source.name
             } if self.camera_source else None,
             "available_local": available,
@@ -307,7 +335,7 @@ class VideoPipeline:
                     if cap and cap.isOpened():
                         self._cap = cap
                         self.camera_error = None
-                        logger.info("Camera connected: %s", current_source.name or current_source.url)
+                        logger.info("Camera connected: %s", _source_label(current_source))
                         retry_delay = RECONNECT_MIN_DELAY
                         last_frame_time = time.time()
                         prev_time = time.time()
@@ -317,7 +345,7 @@ class VideoPipeline:
                             cap.release()
                         except Exception:
                             pass
-                    self.camera_error = f"No se pudo conectar a la cámara: {current_source.name or current_source.url}"
+                    self.camera_error = f"No se pudo conectar a la cámara: {_source_label(current_source)}"
                     next_retry = time.time() + retry_delay
                     logger.warning("Camera unavailable, retrying in %.0fs", retry_delay)
                     retry_delay = min(retry_delay * 2, RECONNECT_MAX_DELAY)
