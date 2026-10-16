@@ -100,6 +100,16 @@ def build_engine(base_dir: str) -> bool:
     return True
 
 
+def engine_is_stale(base_dir: str) -> bool:
+    """True si best.pt es más reciente que best.engine: el motor se generó a partir de otros pesos.
+
+    Sin esta comprobación, al sustituir best.pt por un modelo reentrenado el servidor seguiría usando el
+    motor del modelo anterior e informaría de ENGINE como si fuera el actual.
+    """
+    pt, engine = os.path.join(base_dir, "best.pt"), os.path.join(base_dir, "best.engine")
+    return os.path.exists(pt) and os.path.exists(engine) and os.path.getmtime(pt) > os.path.getmtime(engine)
+
+
 def _load(path: str):
     """Carga los pesos y hace una inferencia de prueba para detectar motores incompatibles."""
     from ultralytics import YOLO
@@ -115,10 +125,16 @@ def load_model(base_dir: str):
     require_cuda()
     engine, pt, onnx = (os.path.join(base_dir, f"best.{ext}") for ext in ("engine", "pt", "onnx"))
 
+    use_engine = True
     if not os.path.exists(engine):
         build_engine(base_dir)
+    elif engine_is_stale(base_dir):
+        logger.warning("best.pt es más reciente que best.engine: se regenera el motor para el modelo actual")
+        if not build_engine(base_dir):
+            logger.warning("No se pudo regenerar el motor; se usa best.pt para no ejecutar el modelo anterior")
+            use_engine = False
 
-    if os.path.exists(engine):
+    if use_engine and os.path.exists(engine):
         try:
             return _load(engine), Runtime(engine, "cuda", False)
         except Exception as e:
