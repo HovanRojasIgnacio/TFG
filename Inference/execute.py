@@ -92,13 +92,14 @@ def purge_old_snapshots() -> set:
     """
     limit = time.time() - SNAPSHOT_RETENTION_DAYS * 86400
     removed = set()
+    os.makedirs(infractions_dir, exist_ok=True)  # Por si alguien borró la carpeta con el servidor en marcha
     for entry in os.scandir(infractions_dir):
-        if entry.is_file() and entry.name.lower().endswith(".jpg") and entry.stat().st_mtime < limit:
-            try:
+        try:
+            if entry.is_file() and entry.name.lower().endswith(".jpg") and entry.stat().st_mtime < limit:
                 os.remove(entry.path)
                 removed.add(entry.name)
-            except OSError as e:
-                logger.warning("No se pudo borrar la captura %s: %s", entry.name, e)
+        except OSError as e:  # Borrada o bloqueada por otro proceso entre el listado y el borrado
+            logger.warning("No se pudo borrar la captura %s: %s", entry.name, e)
     if removed:
         logger.info("Borradas %d capturas con más de %g días", len(removed), SNAPSHOT_RETENTION_DAYS)
     return removed
@@ -403,7 +404,12 @@ class VideoPipeline:
     def _purge_log(self):
         """Borra las capturas caducadas y quita del registro las entradas cuya imagen ya no existe."""
         self._last_purge = time.time()
-        removed = purge_old_snapshots()
+        try:
+            removed = purge_old_snapshots()
+        except OSError as e:
+            # Se ejecuta en el único hilo de proceso: un fallo de disco no debe terminarlo
+            logger.error("No se pudieron revisar las capturas antiguas: %s", e)
+            return
         if removed:
             self.infractions_log = deque(
                 (item for item in self.infractions_log if os.path.basename(item["image_path"]) not in removed),
