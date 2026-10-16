@@ -66,6 +66,7 @@ function App() {
             cameraError={telemetry.camera_error}
             onOpenCameraModal={() => {
               cameras.clearSelectError();
+              cameras.loadCameras();
               setCameraModalOpen(true);
             }}
           />
