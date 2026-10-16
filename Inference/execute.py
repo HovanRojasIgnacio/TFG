@@ -445,7 +445,7 @@ class VideoPipeline:
         names = [model.names[c] for c in boxes.cls.int().tolist()]
 
         # Cada operario cuenta una vez aunque el modelo lo marque como persona, cabeza y casco
-        current_counts, highest_infraction_conf, counted_flags = counting.count(names, confs)
+        current_counts, highest_infraction_conf, counted_flags = counting.count(names, confs, coords)
 
         # Solo se dibujan los recuadros que cuentan, para que la imagen coincida con los contadores
         for (x1, y1, x2, y2), conf, name, counted in zip(coords, confs, names, counted_flags):

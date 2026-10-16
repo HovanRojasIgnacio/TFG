@@ -85,7 +85,8 @@ def _iou(a, b):
 
 def _is_violation(dets):
     # Misma regla que execute.py: cada operario cuenta una vez (véase counting.py)
-    counts, _, _ = counting.count([c for c, _, _ in dets], [conf for _, conf, _ in dets])
+    counts, _, _ = counting.count([c for c, _, _ in dets], [conf for _, conf, _ in dets],
+                                  [box for _, _, box in dets])
     return counts["no_helmet"] > 0
 
 
