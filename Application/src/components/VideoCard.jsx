@@ -1,8 +1,18 @@
 import { useState, useEffect } from 'react';
 import { API_BASE, STREAM_RETRY_MS } from '../config';
 
-export default function VideoCard({ isActive, onToggleActive, hasInfraction, device, weightsFormat }) {
+export default function VideoCard({ isActive, onToggleActive, hasInfraction, device, weightsFormat, backendOnline }) {
   const [streamError, setStreamError] = useState(false);
+
+  // Si el backend se cae, el navegador no avisa con onError ni onLoad: la imagen MJPEG se queda en el
+  // último frame. Cuando el backend vuelve a responder se monta una imagen nueva con otra URL, que abre
+  // otra conexión. (Ajuste de estado durante el render, el patrón que recomienda React.)
+  const [streamKey, setStreamKey] = useState(0);
+  const [lastOnline, setLastOnline] = useState(backendOnline);
+  if (backendOnline !== lastOnline) {
+    setLastOnline(backendOnline);
+    if (backendOnline && lastOnline === false) setStreamKey(k => k + 1);
+  }
 
   // Si el stream falla (por ejemplo, el backend aún arranca), se reintenta solo mientras la monitorización esté activa
   useEffect(() => {
@@ -27,7 +37,8 @@ export default function VideoCard({ isActive, onToggleActive, hasInfraction, dev
       <div className="video-viewport">
         {isActive && !streamError ? (
           <img
-            src={`${API_BASE}/api/stream`}
+            key={streamKey}
+            src={`${API_BASE}/api/stream?c=${streamKey}`}
             alt="Señal de vídeo"
             className="stream-img"
             onError={() => setStreamError(true)}
