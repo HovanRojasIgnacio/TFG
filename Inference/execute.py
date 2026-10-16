@@ -24,6 +24,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+import counting
 from runtime import load_model, precision_kwargs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -52,18 +53,6 @@ model, (weights_path, device, use_half) = load_model(current_dir)
 logger.info("Modelo: %s | dispositivo: %s | FP16: %s", os.path.basename(weights_path), device, use_half)
 
 
-def _class_category(class_name: str) -> str:
-    """Agrupa una clase del modelo en una de las tres categorías del panel."""
-    name = class_name.lower()
-    if "no_helmet" in name or name == "head":
-        return "no_helmet"
-    if "with_helmet" in name or name == "helmet":
-        return "helmet"
-    return "face"
-
-
-# Se calcula una vez al arrancar, no por cada caja de cada frame
-CLASS_CATEGORIES = {class_id: _class_category(name) for class_id, name in model.names.items()}
 BOX_STYLES = {  # Color BGR y texto de la etiqueta
     "no_helmet": ((0, 0, 255), "PELIGRO: Sin Casco"),
     "helmet": ((0, 255, 0), "OK: Casco"),
@@ -479,20 +468,19 @@ class VideoPipeline:
                 **precision_kwargs(use_half)
             )
 
-            current_counts = {"helmet": 0, "no_helmet": 0, "face": 0}
-            highest_infraction_conf = 0.0
             boxes = results[0].boxes
-
             # Una sola copia GPU -> CPU por frame en lugar de tres por caja
-            for (x1, y1, x2, y2), conf, class_id in zip(boxes.xyxy.int().tolist(),
-                                                        boxes.conf.tolist(),
-                                                        boxes.cls.int().tolist()):
-                category = CLASS_CATEGORIES[class_id]
-                current_counts[category] += 1
-                if category == "no_helmet":
-                    highest_infraction_conf = max(highest_infraction_conf, conf)
+            coords, confs = boxes.xyxy.int().tolist(), boxes.conf.tolist()
+            names = [model.names[c] for c in boxes.cls.int().tolist()]
 
-                color, text = BOX_STYLES[category]
+            # Cada operario cuenta una vez aunque el modelo lo marque como persona, cabeza y casco
+            current_counts, highest_infraction_conf, counted_flags = counting.count(names, confs)
+
+            # Solo se dibujan los recuadros que cuentan, para que la imagen coincida con los contadores
+            for (x1, y1, x2, y2), conf, name, counted in zip(coords, confs, names, counted_flags):
+                if not counted:
+                    continue
+                color, text = BOX_STYLES[counting.class_category(name)]
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, f"{text} ({conf:.2f})", (x1, max(y1 - 10, 20)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
