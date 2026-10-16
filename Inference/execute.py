@@ -32,12 +32,19 @@ logger = logging.getLogger("guardwatch")
 
 app = FastAPI(title="GuardWatch AI Engine")
 
+# Solo el panel puede llamar a la API desde un navegador. Con "*", cualquier página web abierta por el
+# operador podía cambiar la cámara o el umbral y leer las respuestas. GUARDWATCH_ORIGINS añade otros
+# orígenes separados por comas (por ejemplo, el panel servido desde otro equipo de la red).
+DASHBOARD_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173",   # npm run dev
+                     "http://localhost:4173", "http://127.0.0.1:4173",   # npm run preview
+                     "https://hovanrojasignacio.github.io"]               # versión publicada en GitHub Pages
+extra_origins = [o.strip().rstrip("/") for o in os.environ.get("GUARDWATCH_ORIGINS", "").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=DASHBOARD_ORIGINS + extra_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 current_dir = os.path.dirname(os.path.abspath(__file__))

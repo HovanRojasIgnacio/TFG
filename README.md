@@ -92,7 +92,7 @@ npm run deploy
 La plataforma se empaquetará de forma automática y los cambios se verán reflejados en tu enlace público definitivo:
  - https://hovanrojasignacio.github.io/TFG/
 
-Para apuntar la interfaz a otro backend, define la variable `VITE_API_BASE` (por ejemplo en `Application/.env`: `VITE_API_BASE=http://192.168.1.50:8000`) antes de ejecutar `npm run dev` o `npm run build`.
+Para apuntar la interfaz a otro backend, define la variable `VITE_API_BASE` (por ejemplo en `Application/.env`: `VITE_API_BASE=http://192.168.1.50:8000`) antes de ejecutar `npm run dev` o `npm run build`. El backend solo acepta peticiones del navegador desde las direcciones del panel (`http://localhost:5173`, `http://localhost:4173` y la versión de GitHub Pages); si el panel se sirve desde otra dirección, añádela al arrancar el backend con `GUARDWATCH_ORIGINS` (por ejemplo, `$env:GUARDWATCH_ORIGINS = "http://192.168.1.50:5173"`).
 
 Nota Técnica: Al acceder desde tu enlace público de GitHub Pages, la aplicación de React intentará conectarse con el motor local (localhost:8000). Por lo tanto, el recuadro de vídeo se activará únicamente si tienes encendido el backend localmente ejecutando python execute.py en tu PC.
 
@@ -107,7 +107,7 @@ El stream de vídeo renderiza las cajas de detección en tiempo real según los 
 
 ## Seguridad y acceso a la red
 
-Por defecto el backend escucha en `0.0.0.0:8000` con CORS abierto (`*`) y **sin autenticación**: cualquier equipo de la misma red puede ver el vídeo, leer el registro de infracciones y cambiar los ajustes. Es adecuado para una demostración en una red de confianza, pero no para una red compartida o pública.
+Por defecto el backend escucha en `0.0.0.0:8000` **sin autenticación**. CORS solo admite las direcciones del panel, así que una página web cualquiera abierta en el navegador no puede usar la API, pero cualquier equipo de la misma red puede llamarla directamente: ver el vídeo, leer el registro de infracciones y cambiar los ajustes. Es adecuado para una demostración en una red de confianza, pero no para una red compartida o pública.
 
 Para limitar el acceso a este equipo, arranca el backend con:
 
