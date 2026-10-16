@@ -330,6 +330,7 @@ class VideoPipeline:
         self._handover = None  # (fuente, cámara ya abierta) que set_camera deja para el bucle
         purge_old_snapshots()
         self._last_purge = time.time()
+        self._last_error_log = 0.0
         
         self.thread = threading.Thread(target=self._process_stream, daemon=True)
         self.thread.start()
@@ -409,6 +410,78 @@ class VideoPipeline:
             except Exception:
                 pass
             self._cap = None
+
+    def _process_frame(self, frame, source: CameraSource, current_time: float, frame_start: float):
+        """Detección, dibujo, registro de infracciones y codificación de un frame."""
+        # For local cameras, flip horizontally (mirror effect)
+        if source.type == "local":
+            frame = cv2.flip(frame, 1)
+
+        # Inferencia YOLO
+        results = model.predict(
+            frame,
+            device=device,
+            conf=self.conf_threshold,
+            verbose=False,
+            **precision_kwargs(use_half)
+        )
+
+        boxes = results[0].boxes
+        # Una sola copia GPU -> CPU por frame en lugar de tres por caja
+        coords, confs = boxes.xyxy.int().tolist(), boxes.conf.tolist()
+        names = [model.names[c] for c in boxes.cls.int().tolist()]
+
+        # Cada operario cuenta una vez aunque el modelo lo marque como persona, cabeza y casco
+        current_counts, highest_infraction_conf, counted_flags = counting.count(names, confs)
+
+        # Solo se dibujan los recuadros que cuentan, para que la imagen coincida con los contadores
+        for (x1, y1, x2, y2), conf, name, counted in zip(coords, confs, names, counted_flags):
+            if not counted:
+                continue
+            color, text = BOX_STYLES[counting.class_category(name)]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, f"{text} ({conf:.2f})", (x1, max(y1 - 10, 20)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        self.active_detections = current_counts
+        total = current_counts["helmet"] + current_counts["no_helmet"]
+        self.safety_score = int((current_counts["helmet"] / total) * 100) if total > 0 else 100
+
+        # Registro de infracciones
+        if current_counts["no_helmet"] > 0 and (current_time - self.last_infraction_save) > self.save_cooldown:
+            filename = f"inf_{int(current_time)}.jpg"
+            filepath = os.path.join(infractions_dir, filename)
+            cv2.imwrite(filepath, frame)
+            self.last_infraction_save = current_time
+
+            # El registro guarda las últimas 100; la imagen de la que sale se borra del disco
+            if len(self.infractions_log) == self.infractions_log.maxlen:
+                evicted = os.path.basename(self.infractions_log[0]["image_path"])
+                try:
+                    os.remove(os.path.join(infractions_dir, evicted))
+                except OSError as e:
+                    logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
+
+            self.infractions_log.append({
+                "id": int(current_time * 1000),
+                "timestamp": time.strftime("%H:%M:%S", time.localtime(current_time)),
+                "confidence": round(highest_infraction_conf, 2),
+                "image_path": f"/static/infractions/{filename}",
+                "details": f"Infracción detectada: {current_counts['no_helmet']} operario(s) sin protección."
+            })
+
+        # El JPEG solo se codifica si alguien está viendo el stream (ahorra CPU)
+        if time.time() - self.last_viewer_time < VIEWER_TIMEOUT:
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ret:
+                with self.lock:
+                    self.latest_encoded_frame = buffer.tobytes()
+                    self.frame_id += 1
+        elif self.latest_encoded_frame is not None:
+            with self.lock:
+                self.latest_encoded_frame = None  # Evita mostrar un frame antiguo al reconectar
+
+        self.latency_window.append((time.perf_counter() - frame_start) * 1000)
 
     def _process_stream(self):
         prev_time = time.time()
@@ -494,81 +567,21 @@ class VideoPipeline:
             last_frame_time = time.time()
             frame_start = time.perf_counter()
 
-            # For local cameras, flip horizontally (mirror effect)
-            if current_source.type == "local":
-                frame = cv2.flip(frame, 1)
-
             current_time = time.time()
             time_diff = current_time - prev_time
             if time_diff > 0:
                 self.fps = 1.0 / time_diff
             prev_time = current_time
 
-            # Inferencia YOLO
-            results = model.predict(
-                frame,
-                device=device,
-                conf=self.conf_threshold,
-                verbose=False,
-                **precision_kwargs(use_half)
-            )
-
-            boxes = results[0].boxes
-            # Una sola copia GPU -> CPU por frame en lugar de tres por caja
-            coords, confs = boxes.xyxy.int().tolist(), boxes.conf.tolist()
-            names = [model.names[c] for c in boxes.cls.int().tolist()]
-
-            # Cada operario cuenta una vez aunque el modelo lo marque como persona, cabeza y casco
-            current_counts, highest_infraction_conf, counted_flags = counting.count(names, confs)
-
-            # Solo se dibujan los recuadros que cuentan, para que la imagen coincida con los contadores
-            for (x1, y1, x2, y2), conf, name, counted in zip(coords, confs, names, counted_flags):
-                if not counted:
-                    continue
-                color, text = BOX_STYLES[counting.class_category(name)]
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, f"{text} ({conf:.2f})", (x1, max(y1 - 10, 20)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-            self.active_detections = current_counts
-            total = current_counts["helmet"] + current_counts["no_helmet"]
-            self.safety_score = int((current_counts["helmet"] / total) * 100) if total > 0 else 100
-
-            # Registro de infracciones
-            if current_counts["no_helmet"] > 0 and (current_time - self.last_infraction_save) > self.save_cooldown:
-                filename = f"inf_{int(current_time)}.jpg"
-                filepath = os.path.join(infractions_dir, filename)
-                cv2.imwrite(filepath, frame)
-                self.last_infraction_save = current_time
-
-                # El registro guarda las últimas 100; la imagen de la que sale se borra del disco
-                if len(self.infractions_log) == self.infractions_log.maxlen:
-                    evicted = os.path.basename(self.infractions_log[0]["image_path"])
-                    try:
-                        os.remove(os.path.join(infractions_dir, evicted))
-                    except OSError as e:
-                        logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
-
-                self.infractions_log.append({
-                    "id": int(current_time * 1000),
-                    "timestamp": time.strftime("%H:%M:%S", time.localtime(current_time)),
-                    "confidence": round(highest_infraction_conf, 2),
-                    "image_path": f"/static/infractions/{filename}",
-                    "details": f"Infracción detectada: {current_counts['no_helmet']} operario(s) sin protección."
-                })
-
-            # El JPEG solo se codifica si alguien está viendo el stream (ahorra CPU)
-            if time.time() - self.last_viewer_time < VIEWER_TIMEOUT:
-                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                if ret:
-                    with self.lock:
-                        self.latest_encoded_frame = buffer.tobytes()
-                        self.frame_id += 1
-            elif self.latest_encoded_frame is not None:
-                with self.lock:
-                    self.latest_encoded_frame = None  # Evita mostrar un frame antiguo al reconectar
-
-            self.latency_window.append((time.perf_counter() - frame_start) * 1000)
+            try:
+                self._process_frame(frame, current_source, current_time, frame_start)
+            except Exception:
+                # Un error inesperado (CUDA, TensorRT, OpenCV...) no debe terminar el único hilo de proceso:
+                # el servidor seguiría respondiendo con los últimos valores pero sin vídeo ni infracciones
+                if time.time() - self._last_error_log > 10:
+                    logger.exception("Error al procesar un frame; se continúa con el siguiente")
+                    self._last_error_log = time.time()
+                time.sleep(0.1)
 
         if self._cap:
             self._cap.release()
