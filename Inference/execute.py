@@ -360,6 +360,13 @@ class VideoPipeline:
             "error": self.camera_error
         }
 
+    def _clear_detections(self):
+        """Sin frames no hay detecciones: si se mantuvieran las del último frame, una infracción vista justo
+        antes de perder la cámara dejaría la alarma sonando y el borde rojo mientras no hay vídeo."""
+        self.active_detections = {"helmet": 0, "no_helmet": 0, "face": 0}
+        self.safety_score = 100
+        self.fps = 0.0
+
     def _release_cap(self):
         if self._cap is not None:
             try:
@@ -399,6 +406,7 @@ class VideoPipeline:
 
             if not self._cap or not self._cap.isOpened():
                 # Sin cámara abierta (arranque, cambio, fallo o desconexión): reintento con espera creciente
+                self._clear_detections()
                 if time.time() >= next_retry:
                     cap = _open_capture(current_source)
                     if self.camera_source != current_source:
