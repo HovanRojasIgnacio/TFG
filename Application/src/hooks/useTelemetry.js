@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { API_BASE, POLL_INTERVAL_MS, DEFAULT_CONF } from '../config';
+import { API_BASE, POLL_INTERVAL_MS, DEFAULT_CONF, REQUEST_TIMEOUT_MS } from '../config';
 
 const INITIAL_TELEMETRY = {
   fps: 0,
@@ -37,7 +37,10 @@ export function useTelemetry(isActive, onStats) {
 
     const poll = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/stats`, { signal: controller.signal });
+        // Además de cancelarse al desmontar, cada consulta caduca: si la red cae sin cerrar la conexión,
+        // la petición quedaría pendiente y el sondeo (que espera a la anterior) se pararía sin avisar
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+        const res = await fetch(`${API_BASE}/api/stats`, { signal });
         if (!res.ok) throw new Error("Error en servidor");
         const data = await res.json();
         setTelemetry(prev => ({

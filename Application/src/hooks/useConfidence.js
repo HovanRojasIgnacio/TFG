@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { API_BASE, CONF_DEBOUNCE_MS } from '../config';
+import { API_BASE, CONF_DEBOUNCE_MS, REQUEST_TIMEOUT_MS } from '../config';
 
 /**
  * Manejador del deslizador de confianza: actualiza la interfaz al instante
@@ -23,7 +23,8 @@ export function useConfidence(setTelemetry) {
         const response = await fetch(`${API_BASE}/api/settings`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ conf: value })
+          body: JSON.stringify({ conf: value }),
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
         });
         if (response.ok) {
           const data = await response.json();
