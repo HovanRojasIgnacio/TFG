@@ -24,7 +24,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 from ultralytics import YOLO
 
 import counting
-from runtime import build_engine, require_cuda
+from runtime import build_engine, engine_is_stale, require_cuda
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
@@ -36,8 +36,8 @@ def load_models():
     engine = os.path.join(current_dir, "best.engine")
     if not os.path.exists(pt):
         raise SystemExit(f"Falta {pt}: es la referencia de la comparación.")
-    if not os.path.exists(engine) and not build_engine(current_dir):
-        raise SystemExit("No hay best.engine y no se pudo generar (¿falta requirements-tensorrt.txt?).")
+    if (not os.path.exists(engine) or engine_is_stale(current_dir)) and not build_engine(current_dir):
+        raise SystemExit("No hay un best.engine actual y no se pudo generar (¿falta requirements-tensorrt.txt?).")
     return YOLO(pt, task="detect"), YOLO(engine, task="detect")
 
 
