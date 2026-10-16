@@ -23,6 +23,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 from ultralytics import YOLO
 
+import counting
 from runtime import build_engine, require_cuda
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -83,8 +84,9 @@ def _iou(a, b):
 
 
 def _is_violation(dets):
-    # Misma regla que execute.py
-    return any("no_helmet" in c.lower() or c.lower() == "head" for c, _, _ in dets)
+    # Misma regla que execute.py: cada operario cuenta una vez (véase counting.py)
+    counts, _, _ = counting.count([c for c, _, _ in dets], [conf for _, conf, _ in dets])
+    return counts["no_helmet"] > 0
 
 
 def report_agreement(pt_model, engine_model, folder):
