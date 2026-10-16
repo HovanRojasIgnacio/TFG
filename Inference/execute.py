@@ -85,6 +85,8 @@ IP_FRAME_FAIL_TIMEOUT = IP_READ_TIMEOUT_MS / 1000 + 1
 # Días que se conservan las capturas de infracciones. La Ley Orgánica 3/2018 (art. 22) fija un máximo de un
 # mes para las imágenes de videovigilancia salvo que se necesiten para acreditar un hecho.
 SNAPSHOT_RETENTION_DAYS = float(os.environ.get("GUARDWATCH_SNAPSHOT_DAYS", "30"))
+PROCESSING_ERROR = "Error al procesar el vídeo (detalles en el registro del servidor)"
+PROCESSING_ERROR_AFTER = 2.0  # Segundos fallando seguidos tras los que el error se muestra en el panel
 PURGE_INTERVAL = 3600.0  # Cada cuánto se revisan las capturas antiguas mientras el servidor está en marcha (s)
 
 
@@ -354,6 +356,7 @@ class VideoPipeline:
         purge_old_snapshots()
         self._last_purge = time.time()
         self._last_error_log = 0.0
+        self._failing_since = None  # Inicio de una racha de fallos al procesar frames
         
         self.thread = threading.Thread(target=self._process_stream, daemon=True)
         self.thread.start()
@@ -428,6 +431,28 @@ class VideoPipeline:
             self.infractions_log = deque(
                 (item for item in self.infractions_log if os.path.basename(item["image_path"]) not in removed),
                 maxlen=self.infractions_log.maxlen)
+
+    def _on_processing_error(self, frame):
+        """Tras un fallo al procesar un frame, el panel no debe seguir mostrando el último resultado bueno.
+
+        Se borran los contadores (si no, una infracción anterior mantendría la alarma), se sigue enviando el
+        vídeo sin anotar y, si el fallo dura más de PROCESSING_ERROR_AFTER segundos, se muestra como error.
+        """
+        self._clear_detections()
+        now = time.time()
+        if self._failing_since is None:
+            self._failing_since = now
+        elif now - self._failing_since > PROCESSING_ERROR_AFTER and not self.camera_error:
+            self.camera_error = PROCESSING_ERROR
+        if now - self.last_viewer_time < VIEWER_TIMEOUT:
+            try:
+                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ret:
+                    with self.lock:
+                        self.latest_encoded_frame = buffer.tobytes()
+                        self.frame_id += 1
+            except Exception:
+                pass
 
     def _clear_detections(self):
         """Sin frames no hay detecciones: si se mantuvieran las del último frame, una infracción vista justo
@@ -609,19 +634,24 @@ class VideoPipeline:
 
             current_time = time.time()
             time_diff = current_time - prev_time
-            if time_diff > 0:
-                self.fps = 1.0 / time_diff
             prev_time = current_time
 
             try:
                 self._process_frame(frame, current_source, current_time, frame_start)
             except Exception:
-                # Un error inesperado (CUDA, TensorRT, OpenCV...) no debe terminar el único hilo de proceso:
-                # el servidor seguiría respondiendo con los últimos valores pero sin vídeo ni infracciones
+                # Un error inesperado (CUDA, TensorRT, OpenCV...) no debe terminar el único hilo de proceso
                 if time.time() - self._last_error_log > 10:
                     logger.exception("Error al procesar un frame; se continúa con el siguiente")
                     self._last_error_log = time.time()
+                self._on_processing_error(frame)
                 time.sleep(0.1)
+            else:
+                if time_diff > 0:
+                    self.fps = 1.0 / time_diff
+                if self._failing_since is not None:  # El procesamiento se ha recuperado
+                    self._failing_since = None
+                    if self.camera_error == PROCESSING_ERROR:
+                        self.camera_error = None
 
         if self._cap:
             self._cap.release()
