@@ -464,24 +464,26 @@ class VideoPipeline:
         if current_counts["no_helmet"] > 0 and (current_time - self.last_infraction_save) > self.save_cooldown:
             filename = f"inf_{int(current_time)}.jpg"
             filepath = os.path.join(infractions_dir, filename)
-            cv2.imwrite(filepath, frame)
             self.last_infraction_save = current_time
+            if not cv2.imwrite(filepath, frame):
+                # Disco lleno o carpeta sin permisos: sin imagen no se registra una entrada con la evidencia rota
+                logger.error("No se pudo guardar la captura de la infracción en %s", filepath)
+            else:
+                # El registro guarda las últimas 100; la imagen de la que sale se borra del disco
+                if len(self.infractions_log) == self.infractions_log.maxlen:
+                    evicted = os.path.basename(self.infractions_log[0]["image_path"])
+                    try:
+                        os.remove(os.path.join(infractions_dir, evicted))
+                    except OSError as e:
+                        logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
 
-            # El registro guarda las últimas 100; la imagen de la que sale se borra del disco
-            if len(self.infractions_log) == self.infractions_log.maxlen:
-                evicted = os.path.basename(self.infractions_log[0]["image_path"])
-                try:
-                    os.remove(os.path.join(infractions_dir, evicted))
-                except OSError as e:
-                    logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
-
-            self.infractions_log.append({
-                "id": int(current_time * 1000),
-                "timestamp": time.strftime("%H:%M:%S", time.localtime(current_time)),
-                "confidence": round(highest_infraction_conf, 2),
-                "image_path": f"/static/infractions/{filename}",
-                "details": f"Infracción detectada: {current_counts['no_helmet']} operario(s) sin protección."
-            })
+                self.infractions_log.append({
+                    "id": int(current_time * 1000),
+                    "timestamp": time.strftime("%H:%M:%S", time.localtime(current_time)),
+                    "confidence": round(highest_infraction_conf, 2),
+                    "image_path": f"/static/infractions/{filename}",
+                    "details": f"Infracción detectada: {current_counts['no_helmet']} operario(s) sin protección."
+                })
 
         # El JPEG solo se codifica si alguien está viendo el stream (ahorra CPU)
         if time.time() - self.last_viewer_time < VIEWER_TIMEOUT:
