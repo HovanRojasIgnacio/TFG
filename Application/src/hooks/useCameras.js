@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { API_BASE } from '../config';
 
 /**
@@ -12,8 +12,9 @@ export function useCameras(setTelemetry, onSelected) {
   // sondeo de /api/stats sobrescribe cada 500 ms con el estado del backend.
   const [selectError, setSelectError] = useState(null);
 
-  // Cámaras disponibles y cámara actual al montar
-  useEffect(() => {
+  // Cámaras disponibles y cámara actual. Se piden al montar y cada vez que se abre el diálogo: si el
+  // backend aún no estaba en marcha al cargar el panel, la lista no se quedaría vacía para siempre.
+  const loadCameras = useCallback(() => {
     fetch(`${API_BASE}/api/cameras`)
       .then(res => res.json())
       .then(data => {
@@ -24,6 +25,8 @@ export function useCameras(setTelemetry, onSelected) {
       })
       .catch(console.error);
   }, [setTelemetry]);
+
+  useEffect(loadCameras, [loadCameras]);
 
   const requestSelect = async (camera, networkErrorMessage) => {
     setSelectError(null);
@@ -83,6 +86,7 @@ export function useCameras(setTelemetry, onSelected) {
     testingCamera,
     selectError,
     clearSelectError,
+    loadCameras,
     selectLocalCamera,
     selectIpCamera,
     refreshCameras
