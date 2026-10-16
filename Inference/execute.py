@@ -71,6 +71,30 @@ IP_OPEN_TIMEOUT_MS = 5000  # Tiempo máximo para conectar con una cámara IP
 IP_READ_TIMEOUT_MS = 5000  # Tiempo máximo esperando un frame de una cámara IP
 CAMERA_TEST_TIMEOUT = (IP_OPEN_TIMEOUT_MS + IP_READ_TIMEOUT_MS) / 1000 + 1  # Prueba al cambiar de cámara (s)
 FRAME_FAIL_TIMEOUT = 2.0  # Segundos sin frames válidos tras los que se da la cámara por desconectada
+# Días que se conservan las capturas de infracciones. La Ley Orgánica 3/2018 (art. 22) fija un máximo de un
+# mes para las imágenes de videovigilancia salvo que se necesiten para acreditar un hecho.
+SNAPSHOT_RETENTION_DAYS = float(os.environ.get("GUARDWATCH_SNAPSHOT_DAYS", "30"))
+PURGE_INTERVAL = 3600.0  # Cada cuánto se revisan las capturas antiguas mientras el servidor está en marcha (s)
+
+
+def purge_old_snapshots() -> set:
+    """Borra las capturas con más de SNAPSHOT_RETENTION_DAYS días y devuelve sus nombres.
+
+    El registro de infracciones está en memoria y empieza vacío en cada arranque, así que sin esta limpieza
+    las capturas de ejecuciones anteriores se quedarían en el disco para siempre.
+    """
+    limit = time.time() - SNAPSHOT_RETENTION_DAYS * 86400
+    removed = set()
+    for entry in os.scandir(infractions_dir):
+        if entry.is_file() and entry.name.lower().endswith(".jpg") and entry.stat().st_mtime < limit:
+            try:
+                os.remove(entry.path)
+                removed.add(entry.name)
+            except OSError as e:
+                logger.warning("No se pudo borrar la captura %s: %s", entry.name, e)
+    if removed:
+        logger.info("Borradas %d capturas con más de %g días", len(removed), SNAPSHOT_RETENTION_DAYS)
+    return removed
 
 
 SECRET_QUERY_KEYS = {"password", "passwd", "pass", "pwd", "token", "key", "auth"}
@@ -304,6 +328,8 @@ class VideoPipeline:
         self._cap = None
         self._camera_lock = threading.Lock()
         self._handover = None  # (fuente, cámara ya abierta) que set_camera deja para el bucle
+        purge_old_snapshots()
+        self._last_purge = time.time()
         
         self.thread = threading.Thread(target=self._process_stream, daemon=True)
         self.thread.start()
@@ -360,6 +386,15 @@ class VideoPipeline:
             "error": self.camera_error
         }
 
+    def _purge_log(self):
+        """Borra las capturas caducadas y quita del registro las entradas cuya imagen ya no existe."""
+        self._last_purge = time.time()
+        removed = purge_old_snapshots()
+        if removed:
+            self.infractions_log = deque(
+                (item for item in self.infractions_log if os.path.basename(item["image_path"]) not in removed),
+                maxlen=self.infractions_log.maxlen)
+
     def _clear_detections(self):
         """Sin frames no hay detecciones: si se mantuvieran las del último frame, una infracción vista justo
         antes de perder la cámara dejaría la alarma sonando y el borde rojo mientras no hay vídeo."""
@@ -383,6 +418,8 @@ class VideoPipeline:
         retry_delay = RECONNECT_MIN_DELAY
 
         while self.is_running:
+            if time.time() - self._last_purge > PURGE_INTERVAL:
+                self._purge_log()
             # Cambio de cámara pedido desde la API. La nueva se abre más abajo, fuera del lock:
             # abrir una cámara IP puede tardar segundos y el lock no debe bloquear a set_camera
             with self._camera_lock:
