@@ -13,12 +13,13 @@ os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import asyncio
 import logging
+import re
 import cv2
 import time
 import threading
 from collections import deque
 from typing import Dict, List, Optional, Union
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -108,13 +109,24 @@ def purge_old_snapshots() -> set:
     return removed
 
 
-SECRET_QUERY_KEYS = {"password", "passwd", "pass", "pwd", "token", "key", "auth"}
+# Una clave que contiene alguna de estas partes se considera secreta (password, loginPas, access_token, api_key...)
+SECRET_KEY_PARTS = ("pass", "pwd", "token", "key", "auth", "secret", "user", "usr", "login", "sign")
+_KEY_VALUE = re.compile(r"([^=&;/?#]+)=([^&;/?#]*)")
+
+
+def _mask_pairs(text: str) -> str:
+    """Sustituye por *** el valor de cada par clave=valor cuya clave parece secreta."""
+    return _KEY_VALUE.sub(lambda m: f"{m.group(1)}=***"
+                          if any(part in m.group(1).lower() for part in SECRET_KEY_PARTS) else m.group(0), text)
 
 
 def mask_url(url: Optional[str]) -> Optional[str]:
     """Oculta usuario, contraseña y tokens de la URL de una cámara antes de mostrarla o registrarla.
 
-    La API responde a cualquier origen, así que las credenciales nunca salen del servidor.
+    Cualquier equipo de la red puede consultar la API, así que las credenciales nunca salen del servidor. Se
+    enmascaran el usuario y la contraseña de la dirección y los pares clave=valor secretos tanto en la consulta
+    como en la ruta: muchas cámaras y grabadores los ponen en la ruta, como en
+    rtsp://host:554/user=admin&password=...&channel=1.
     """
     if not url:
         return url
@@ -123,9 +135,8 @@ def mask_url(url: Optional[str]) -> Optional[str]:
         netloc = parts.netloc
         if "@" in netloc:
             netloc = "***@" + netloc.rsplit("@", 1)[1]
-        query = urlencode([(k, "***" if k.lower() in SECRET_QUERY_KEYS else v)
-                           for k, v in parse_qsl(parts.query, keep_blank_values=True)], safe="*")
-        return urlunsplit(parts._replace(netloc=netloc, query=query))
+        return urlunsplit(parts._replace(netloc=netloc, path=_mask_pairs(parts.path),
+                                         query=_mask_pairs(parts.query), fragment=_mask_pairs(parts.fragment)))
     except ValueError:
         return "URL no válida"
 
