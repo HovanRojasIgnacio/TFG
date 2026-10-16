@@ -335,6 +335,7 @@ class VideoPipeline:
         self._cap = None
         self._camera_lock = threading.Lock()
         self._handover = None  # (fuente, cámara ya abierta) que set_camera deja para el bucle
+        self._retry_requested = False  # set_camera pide reconectar la cámara actual sin esperar
         purge_old_snapshots()
         self._last_purge = time.time()
         self._last_error_log = 0.0
@@ -351,6 +352,11 @@ class VideoPipeline:
     def set_camera(self, source: CameraSource) -> bool:
         """Change the camera source. Returns True if successful."""
         if self._same_source(source, self.camera_source):
+            if self.camera_error:
+                # La cámara actual está fallando: elegirla de nuevo pide reconectar ya, sin esperar al
+                # siguiente reintento (que puede tardar hasta RECONNECT_MAX_DELAY)
+                with self._camera_lock:
+                    self._retry_requested = True
             return True
 
         # La prueba (con tiempo máximo) se hace fuera del lock para no bloquear el bucle de captura
@@ -505,6 +511,10 @@ class VideoPipeline:
             with self._camera_lock:
                 requested = self.camera_source
                 handover, self._handover = self._handover, None
+                retry_now, self._retry_requested = self._retry_requested, False
+            if retry_now:
+                next_retry = 0.0
+                retry_delay = RECONNECT_MIN_DELAY
             if requested != current_source:
                 current_source = requested
                 self._release_cap()
