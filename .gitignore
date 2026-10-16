@@ -37,3 +37,6 @@ __pycache__/
 # Documentation build output and temporary review files
 Documentation/_*
 Documentation/*.tmp
+
+# Entrenamientos y separaciones de datasets (rutas locales de cada equipo)
+Inference/runs/
