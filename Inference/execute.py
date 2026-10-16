@@ -77,7 +77,10 @@ RECONNECT_MAX_DELAY = 15.0  # Espera máxima entre reintentos (s)
 IP_OPEN_TIMEOUT_MS = 5000  # Tiempo máximo para conectar con una cámara IP
 IP_READ_TIMEOUT_MS = 5000  # Tiempo máximo esperando un frame de una cámara IP
 CAMERA_TEST_TIMEOUT = (IP_OPEN_TIMEOUT_MS + IP_READ_TIMEOUT_MS) / 1000 + 1  # Prueba al cambiar de cámara (s)
-FRAME_FAIL_TIMEOUT = 2.0  # Segundos sin frames válidos tras los que se da la cámara por desconectada
+FRAME_FAIL_TIMEOUT = 2.0  # Segundos sin frames válidos tras los que se da una cámara local por desconectada
+# Las cámaras IP pueden enviar pocos frames (modos de bajo consumo, cámaras de instantáneas, cortes breves de
+# Wi-Fi): se espera al menos el tiempo de lectura de FFmpeg antes de darlas por desconectadas
+IP_FRAME_FAIL_TIMEOUT = IP_READ_TIMEOUT_MS / 1000 + 1
 # Días que se conservan las capturas de infracciones. La Ley Orgánica 3/2018 (art. 22) fija un máximo de un
 # mes para las imágenes de videovigilancia salvo que se necesiten para acreditar un hecho.
 SNAPSHOT_RETENTION_DAYS = float(os.environ.get("GUARDWATCH_SNAPSHOT_DAYS", "30"))
@@ -579,8 +582,9 @@ class VideoPipeline:
             if not success or frame is None:
                 # Por tiempo y no por número de fallos: en una cámara IP cada lectura fallida
                 # puede tardar hasta IP_READ_TIMEOUT_MS
-                if time.time() - last_frame_time > FRAME_FAIL_TIMEOUT:
-                    logger.warning("No frames for %.0fs, releasing camera", FRAME_FAIL_TIMEOUT)
+                fail_timeout = IP_FRAME_FAIL_TIMEOUT if current_source.type == "ip" else FRAME_FAIL_TIMEOUT
+                if time.time() - last_frame_time > fail_timeout:
+                    logger.warning("No frames for %.0fs, releasing camera", fail_timeout)
                     self._release_cap()
                     self.camera_error = "Error de lectura de cámara - cámara desconectada"
                     retry_delay = RECONNECT_MIN_DELAY
