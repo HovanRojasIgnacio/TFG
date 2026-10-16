@@ -32,11 +32,18 @@ def frame_source(source, total: int):
         if not cap.isOpened():
             raise RuntimeError(f"No se pudo abrir el vídeo: {source}")
         produced = 0
+        read_since_rewind = 0
         while produced < total:
             ok, frame = cap.read()
             if not ok:
+                if read_since_rewind == 0:
+                    # Recién rebobinado y sigue sin dar frames: el vídeo no se puede decodificar
+                    cap.release()
+                    raise RuntimeError(f"No se pudo leer ningún frame del vídeo: {source}")
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                read_since_rewind = 0
                 continue
+            read_since_rewind += 1
             produced += 1
             yield frame
         cap.release()
