@@ -53,6 +53,7 @@ function App() {
           hasInfraction={telemetry.active_detections?.no_helmet > 0}
           device={telemetry.device}
           weightsFormat={telemetry.weights_format}
+          backendOnline={backendOnline}
         />
 
         <div className="right-panel">
