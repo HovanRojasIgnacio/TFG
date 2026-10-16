@@ -11,6 +11,7 @@ os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 # RTSP por TCP: FFmpeg usa UDP por defecto y, por Wi-Fi, los paquetes perdidos dan frames
 # corruptos o grises. Se puede cambiar con la variable de entorno (p. ej. "rtsp_transport;udp")
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+import asyncio
 import logging
 import cv2
 import time
@@ -624,7 +625,14 @@ def get_stats(request: Request):
     }
 
 
-def stream_generator():
+async def stream_generator():
+    """Generador asíncrono: no ocupa hilos del servidor mientras espera frames.
+
+    Con un generador síncrono, Starlette ejecuta cada paso en su grupo de 40 hilos, que comparte con todos
+    los endpoints; sin frames (cámara caída) cada espectador que se iba dejaba un hilo ocupado y, al
+    acumularse, la API entera dejaba de responder. Al desconectarse el cliente, Starlette cancela el
+    asyncio.sleep y el generador termina.
+    """
     last_id = -1
     while True:
         pipeline.last_viewer_time = time.time()
@@ -637,11 +645,11 @@ def stream_generator():
             last_id = frame_id
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        time.sleep(0.03)  # Limita el envío a ~30 FPS para no saturar el canal HTTP
+        await asyncio.sleep(0.03)  # Limita el envío a ~30 FPS para no saturar el canal HTTP
 
 
 @app.get("/api/stream")
-def video_feed():
+async def video_feed():
     return StreamingResponse(stream_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
