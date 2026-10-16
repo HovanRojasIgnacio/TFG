@@ -6,6 +6,7 @@ Orden de preferencia (siempre en la GPU NVIDIA):
   2. best.pt (PyTorch en FP16), si TensorRT no está instalado o la generación falla.
   3. best.onnx, solo si ONNX Runtime tiene el proveedor CUDA.
 """
+import hashlib
 import importlib.util
 import logging
 import os
@@ -65,6 +66,20 @@ def _onnx_has_cuda() -> bool:
         return False
 
 
+def _weights_digest(path: str) -> str:
+    """SHA-256 de un archivo de pesos (unos 50 ms para los 20 MB de best.pt)."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_path(engine: str) -> str:
+    """Archivo junto al motor con el SHA-256 de los pesos a partir de los que se generó."""
+    return engine + ".source"
+
+
 def build_engine(base_dir: str) -> bool:
     """Genera best.engine (TensorRT, FP16, formas dinámicas) a partir de best.pt. Devuelve True si lo logra.
 
@@ -93,6 +108,9 @@ def build_engine(base_dir: str) -> bool:
             staged = engine + ".tmp"
             shutil.copy2(built, staged)
             os.replace(staged, engine)
+            # Se anota de qué pesos sale el motor (los copiados, no best.pt, por si cambió durante la exportación)
+            with open(_source_path(engine), "w", encoding="ascii") as f:
+                f.write(_weights_digest(tmp_pt))
     except Exception as e:
         logger.warning("No se pudo generar el motor TensorRT: %s", e)
         return False
@@ -101,13 +119,23 @@ def build_engine(base_dir: str) -> bool:
 
 
 def engine_is_stale(base_dir: str) -> bool:
-    """True si best.pt es más reciente que best.engine: el motor se generó a partir de otros pesos.
+    """True si best.engine no se generó a partir del best.pt actual.
 
-    Sin esta comprobación, al sustituir best.pt por un modelo reentrenado el servidor seguiría usando el
-    motor del modelo anterior e informaría de ENGINE como si fuera el actual.
+    Se compara el SHA-256 de best.pt con el que build_engine anotó al generar el motor; las fechas de los
+    archivos no sirven, porque copiar unos pesos antiguos conserva su fecha. Sin anotación (motor generado
+    antes de existir esta comprobación o copiado de otro equipo) el motor también se considera antiguo.
+    Sin esta comprobación, al sustituir best.pt el servidor seguiría usando el motor del modelo anterior e
+    informaría de ENGINE como si fuera el actual.
     """
     pt, engine = os.path.join(base_dir, "best.pt"), os.path.join(base_dir, "best.engine")
-    return os.path.exists(pt) and os.path.exists(engine) and os.path.getmtime(pt) > os.path.getmtime(engine)
+    if not (os.path.exists(pt) and os.path.exists(engine)):
+        return False
+    try:
+        with open(_source_path(engine), encoding="ascii") as f:
+            built_from = f.read().strip()
+    except OSError:
+        return True
+    return built_from != _weights_digest(pt)
 
 
 def _load(path: str):
@@ -129,7 +157,7 @@ def load_model(base_dir: str):
     if not os.path.exists(engine):
         build_engine(base_dir)
     elif engine_is_stale(base_dir):
-        logger.warning("best.pt es más reciente que best.engine: se regenera el motor para el modelo actual")
+        logger.warning("best.engine no se generó a partir del best.pt actual: se regenera el motor")
         if not build_engine(base_dir):
             logger.warning("No se pudo regenerar el motor; se usa best.pt para no ejecutar el modelo anterior")
             use_engine = False
