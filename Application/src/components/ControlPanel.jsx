@@ -15,14 +15,47 @@ export default function ControlPanel({
   onToggleSound,
   camera,
   cameraError,
-  onOpenCameraModal
+  onOpenCameraModal,
+  profiles,
+  onSelectProfile
 }) {
   const conf = confThreshold ?? DEFAULT_CONF;
+  const loadingProfile = profiles.loading
+    ? profiles.profiles.find(p => p.id === profiles.loading)?.name ?? profiles.loading
+    : null;
+  const profileError = profiles.selectError || profiles.error;
 
   return (
     <div className="card config-card">
       <h3>Consola de Control</h3>
       <div className="divider" />
+
+      <div className="control-group">
+        <label className="control-label" htmlFor="profile-select">Modo de detección:</label>
+        <select
+          id="profile-select"
+          className="mode-select"
+          aria-describedby="profile-help"
+          value={profiles.loading ?? profiles.current ?? ""}
+          disabled={!!profiles.loading || profiles.profiles.length === 0}
+          onChange={(e) => onSelectProfile(e.target.value)}
+        >
+          {profiles.profiles.length === 0 && <option value="">Sin conexión</option>}
+          {profiles.profiles.map(p => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        <p className="slider-desc" id="profile-help" aria-live="polite">
+          {loadingProfile
+            ? `Cargando modelo «${loadingProfile}»… (la primera vez tarda alrededor de un minuto)`
+            : "Elementos de protección que se comprueban."}
+        </p>
+        {profileError && (
+          <div className="camera-error" role="alert">
+            ⚠ {profileError}
+          </div>
+        )}
+      </div>
 
       <div className="control-group">
         <div className="slider-header">
