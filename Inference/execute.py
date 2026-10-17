@@ -12,8 +12,11 @@ os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 # corruptos o grises. Se puede cambiar con la variable de entorno (p. ej. "rtsp_transport;udp")
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import asyncio
+import gc
 import logging
 import re
+import subprocess
+import sys
 import cv2
 import time
 import threading
@@ -23,10 +26,12 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+import torch
 import counting
-from runtime import load_model, precision_kwargs
+import profiles
+from runtime import Runtime, engine_needed, load_model, precision_kwargs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("guardwatch")
@@ -55,17 +60,82 @@ os.makedirs(infractions_dir, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Modelo en la GPU (solo GPU): motor TensorRT, generado automáticamente si hace falta, o best.pt.
-# load_model() ya hace una inferencia de prueba, que sirve de warm-up (véase runtime.py)
-model, (weights_path, device, use_half) = load_model(current_dir)
-logger.info("Modelo: %s | dispositivo: %s | FP16: %s", os.path.basename(weights_path), device, use_half)
+STATE_COLORS = {"ok": (0, 255, 0), "missing": (0, 0, 255), "neutral": (0, 165, 255)}  # BGR: verde, rojo, naranja
 
 
-BOX_STYLES = {  # Color BGR y texto de la etiqueta
-    "no_helmet": ((0, 0, 255), "PELIGRO: Sin Casco"),
-    "helmet": ((0, 255, 0), "OK: Casco"),
-    "face": ((0, 165, 255), "Rostro"),  # naranja
-}
+class Detector:
+    """Modelo cargado en la GPU junto con el perfil que da significado a sus clases.
+
+    El bucle de vídeo lee pipeline.detector una vez por frame, así que cambiar de modo es sustituir la
+    referencia: el frame en curso termina con el detector anterior y el siguiente ya usa el nuevo.
+    """
+
+    def __init__(self, profile: profiles.Profile, model, runtime: Runtime):
+        profiles.check_model(profile, model.names)
+        self.profile, self.model, self.runtime = profile, model, runtime
+        self.styles = {}  # Color BGR y texto de la etiqueta de cada clase que se dibuja
+        for name, rule in profile.classes.items():
+            if rule.state == "ignore":
+                continue
+            if rule.state == "neutral":
+                text = rule.label or name
+            else:
+                label = rule.label or profile.items[rule.item]
+                text = f"OK: {label}" if rule.state == "ok" else f"PELIGRO: Sin {label}"
+            self.styles[name] = (STATE_COLORS[rule.state], text)
+
+    @property
+    def weights_format(self) -> str:
+        return os.path.basename(self.runtime.weights_path).split(".")[-1].upper()
+
+    def summary(self) -> Dict:
+        return {"id": self.profile.id, "name": self.profile.name, "items": self.profile.items}
+
+
+def _check_weights(profile: profiles.Profile) -> None:
+    """Comprueba que profile.json describe las clases de best.pt antes de generar el motor (varios minutos)."""
+    pt = os.path.join(profile.base_dir, "best.pt")
+    if os.path.exists(pt):
+        from ultralytics import YOLO
+        profiles.check_model(profile, YOLO(pt, task="detect").names)  # Solo lee los pesos en la CPU
+
+
+def _build_engine_apart(base_dir: str) -> None:
+    """Genera el motor TensorRT en otro proceso.
+
+    Con el servidor en marcha, la exportación (ONNX, ModelOpt) dentro de este proceso compite por el GIL con el
+    hilo de vídeo y lo congela varios segundos. Si falla, load_model() lo intenta de nuevo o usa best.pt.
+    """
+    code = "import sys, runtime; sys.exit(0 if runtime.build_engine(sys.argv[1]) else 1)"
+    result = subprocess.run([sys.executable, "-c", code, base_dir], cwd=current_dir)
+    if result.returncode != 0:
+        logger.warning("No se pudo generar el motor de %s en otro proceso (código %s)", base_dir, result.returncode)
+
+
+def load_detector(profile_id: str, build_apart: bool = False) -> Detector:
+    """Carga el perfil y su modelo en la GPU: motor TensorRT (se genera la primera vez, ~1 min) o best.pt.
+
+    build_apart: generar el motor, si hace falta, en otro proceso (al cambiar de modo con el vídeo en marcha).
+    load_model() ya hace una inferencia de prueba, que sirve de warm-up (véase runtime.py).
+    """
+    profile = profiles.load(profile_id)
+    _check_weights(profile)
+    if build_apart and engine_needed(profile.base_dir):
+        logger.info("Generando el motor TensorRT de %s en otro proceso (tarda aproximadamente un minuto)...",
+                    profile.name)
+        _build_engine_apart(profile.base_dir)
+    model, runtime = load_model(profile.base_dir)
+    detector = Detector(profile, model, runtime)
+    logger.info("Perfil: %s | modelo: %s | dispositivo: %s | FP16: %s", profile.name,
+                os.path.basename(runtime.weights_path), runtime.device, runtime.half)
+    return detector
+
+
+# Modo de detección con el que arranca el servidor (carpeta de Inference/profiles)
+STARTUP_PROFILE = os.environ.get("GUARDWATCH_PROFILE", "casco")
+if STARTUP_PROFILE not in profiles.discover():
+    raise SystemExit(f"GUARDWATCH_PROFILE={STARTUP_PROFILE!r} no es un perfil instalado. Disponibles: "
+                     f"{', '.join(profiles.discover()) or 'ninguno'} (carpetas de {profiles.PROFILES_DIR})")
 
 # Camera detection cache
 _camera_cache = {"cameras": [], "last_update": 0}
@@ -331,12 +401,22 @@ def _connect_camera(source: CameraSource, timeout: float = CAMERA_TEST_TIMEOUT):
     return None
 
 
+class ProfileBusy(Exception):
+    """Ya se está cargando otro modo de detección."""
+
+
 class VideoPipeline:
-    def __init__(self):
-        self.conf_threshold: float = 0.325
+    def __init__(self, detector: Detector):
+        self.detector = detector
+        self.conf_threshold: float = detector.profile.conf or 0.325
         self.fps: float = 0.0
-        self.active_detections: Dict[str, int] = {"helmet": 0, "no_helmet": 0, "face": 0}
+        self.items: Dict[str, Dict[str, int]] = counting.empty_items(detector.profile)
+        self.neutral: int = 0
+        self.violations: int = 0
         self.safety_score: int = 100
+        self._profile_lock = threading.Lock()
+        self.profile_loading: Optional[str] = None  # Modo que se está cargando en segundo plano
+        self.profile_error: Optional[str] = None    # Error de la última carga fallida
         self.infractions_log = deque(maxlen=100)
         self.last_infraction_save: float = 0.0
         self.save_cooldown: float = 4.0
@@ -457,9 +537,54 @@ class VideoPipeline:
     def _clear_detections(self):
         """Sin frames no hay detecciones: si se mantuvieran las del último frame, una infracción vista justo
         antes de perder la cámara dejaría la alarma sonando y el borde rojo mientras no hay vídeo."""
-        self.active_detections = {"helmet": 0, "no_helmet": 0, "face": 0}
+        self.items = counting.empty_items(self.detector.profile)
+        self.neutral = 0
+        self.violations = 0
         self.safety_score = 100
         self.fps = 0.0
+
+    def select_profile(self, profile_id: str) -> bool:
+        """Empieza a cargar otro modo de detección en segundo plano. Devuelve False si ya es el actual.
+
+        El modelo actual sigue procesando vídeo mientras tanto; generar el motor TensorRT la primera vez tarda
+        alrededor de un minuto y reduce los FPS durante ese tiempo. Lanza KeyError si el modo no existe y
+        ProfileBusy si ya se está cargando otro.
+        """
+        if profile_id not in profiles.discover():  # Solo carpetas instaladas: el id nunca se usa como ruta
+            raise KeyError(profile_id)
+        with self._profile_lock:
+            if self.profile_loading is not None:
+                raise ProfileBusy(self.profile_loading)
+            if profile_id == self.detector.profile.id:
+                self.profile_error = None
+                return False
+            self.profile_loading = profile_id
+            self.profile_error = None
+        threading.Thread(target=self._load_profile, args=(profile_id,), daemon=True).start()
+        return True
+
+    def _load_profile(self, profile_id: str):
+        try:
+            new = load_detector(profile_id, build_apart=True)
+        except Exception as e:
+            # Se conserva el modelo actual: el panel muestra el error y el vídeo no se interrumpe
+            logger.exception("No se pudo cargar el modo %s", profile_id)
+            with self._profile_lock:
+                self.profile_error = f"No se pudo cargar el modo {profile_id}: {e}"
+                self.profile_loading = None
+            return
+        old, self.detector = self.detector, new
+        if new.profile.conf is not None:
+            self.conf_threshold = new.profile.conf  # Umbral recomendado para este modelo
+        self._clear_detections()
+        logger.info("Modo de detección cambiado: %s -> %s", old.profile.name, new.profile.name)
+        with self._profile_lock:
+            self.profile_loading = None
+        # Se libera el modelo anterior cuando termina el frame que aún pudiera estar usándolo
+        del old
+        time.sleep(1.0)
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def _release_cap(self):
         if self._cap is not None:
@@ -475,38 +600,42 @@ class VideoPipeline:
         if source.type == "local":
             frame = cv2.flip(frame, 1)
 
-        # Inferencia YOLO
-        results = model.predict(
+        # Una sola lectura por frame: si se cambia de modo a mitad, este frame termina con el detector anterior
+        detector = self.detector
+        results = detector.model.predict(
             frame,
-            device=device,
+            device=detector.runtime.device,
             conf=self.conf_threshold,
             verbose=False,
-            **precision_kwargs(use_half)
+            **precision_kwargs(detector.runtime.half)
         )
 
         boxes = results[0].boxes
         # Una sola copia GPU -> CPU por frame en lugar de tres por caja
         coords, confs = boxes.xyxy.int().tolist(), boxes.conf.tolist()
-        names = [model.names[c] for c in boxes.cls.int().tolist()]
+        names = [detector.model.names[c] for c in boxes.cls.int().tolist()]
 
         # Cada operario cuenta una vez aunque el modelo lo marque como persona, cabeza y casco
-        current_counts, highest_infraction_conf, counted_flags = counting.count(names, confs, coords)
+        counts = counting.count(detector.profile, names, confs, coords)
 
         # Solo se dibujan los recuadros que cuentan, para que la imagen coincida con los contadores
-        for (x1, y1, x2, y2), conf, name, counted in zip(coords, confs, names, counted_flags):
+        for (x1, y1, x2, y2), conf, name, counted in zip(coords, confs, names, counts.flags):
             if not counted:
                 continue
-            color, text = BOX_STYLES[counting.class_category(name)]
+            color, text = detector.styles[name]
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(frame, f"{text} ({conf:.2f})", (x1, max(y1 - 10, 20)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        self.active_detections = current_counts
-        total = current_counts["helmet"] + current_counts["no_helmet"]
-        self.safety_score = int((current_counts["helmet"] / total) * 100) if total > 0 else 100
+        # Si se cambió de modo durante este frame, sus contadores ya no corresponden al modo actual
+        current_mode = detector is self.detector
+        if current_mode:
+            self.items, self.neutral = counts.items, counts.neutral
+            self.violations, self.safety_score = counts.violations, counts.safety_score
 
         # Registro de infracciones
-        if current_counts["no_helmet"] > 0 and (current_time - self.last_infraction_save) > self.save_cooldown:
+        if current_mode and counts.violations > 0 and \
+                (current_time - self.last_infraction_save) > self.save_cooldown:
             filename = f"inf_{int(current_time)}.jpg"
             filepath = os.path.join(infractions_dir, filename)
             self.last_infraction_save = current_time
@@ -525,9 +654,10 @@ class VideoPipeline:
                 self.infractions_log.append({
                     "id": int(current_time * 1000),
                     "timestamp": time.strftime("%H:%M:%S", time.localtime(current_time)),
-                    "confidence": round(highest_infraction_conf, 2),
+                    "confidence": round(counts.highest_violation, 2),
                     "image_path": f"/static/infractions/{filename}",
-                    "details": f"Infracción detectada: {current_counts['no_helmet']} operario(s) sin protección."
+                    "profile": detector.profile.name,
+                    "details": missing_details(detector.profile, counts.items),
                 })
 
         # El JPEG solo se codifica si alguien está viendo el stream (ahorra CPU)
@@ -657,11 +787,21 @@ class VideoPipeline:
             self._cap.release()
 
 
-pipeline = VideoPipeline()
+def missing_details(profile: profiles.Profile, items: Dict[str, Dict[str, int]]) -> str:
+    """Texto de una infracción con los elementos que faltan, p. ej. "Falta: casco ×1, chaleco ×2"."""
+    parts = [f"{profile.items[item].lower()} ×{c['missing']}" for item, c in items.items() if c["missing"]]
+    return "Falta: " + ", ".join(parts)
+
+
+pipeline = VideoPipeline(load_detector(STARTUP_PROFILE))
 
 
 class SettingsUpdate(BaseModel):
     conf: float
+
+
+class ProfileSelect(BaseModel):
+    id: str
 
 
 class CameraSelect(BaseModel):
@@ -710,6 +850,39 @@ def select_camera(payload: CameraSelect):
     raise HTTPException(status_code=400, detail="No se pudo conectar a la cámara seleccionada")
 
 
+@app.get("/api/profiles")
+def get_profiles():
+    """Modos de detección instalados, el actual y el estado de la carga en curso."""
+    available = []
+    for profile_id in profiles.discover():
+        try:
+            p = profiles.load(profile_id)
+        except Exception as e:  # Un profile.json roto no debe ocultar los demás modos
+            logger.warning("Perfil %s no válido: %s", profile_id, e)
+            continue
+        available.append({"id": p.id, "name": p.name, "items": p.items})
+    return {
+        "profiles": available,
+        "current": pipeline.detector.profile.id,
+        "loading": pipeline.profile_loading,
+        "error": pipeline.profile_error,
+    }
+
+
+@app.post("/api/profiles/select")
+def select_profile(payload: ProfileSelect):
+    """Cambia de modo de detección. La carga es en segundo plano: 202, y el progreso en /api/profiles."""
+    try:
+        started = pipeline.select_profile(payload.id)
+    except KeyError:
+        raise HTTPException(status_code=400, detail=f"Modo de detección desconocido: {payload.id}")
+    except ProfileBusy as e:
+        raise HTTPException(status_code=409, detail=f"Ya se está cargando el modo {e}")
+    if not started:
+        return {"status": "current", "id": payload.id}
+    return JSONResponse(status_code=202, content={"status": "loading", "id": payload.id})
+
+
 @app.get("/api/stats")
 def get_stats(request: Request):
     base_url = str(request.base_url).rstrip("/")
@@ -720,6 +893,7 @@ def get_stats(request: Request):
     ]
 
     camera_info = pipeline.get_camera_info(probe=False)
+    detector = pipeline.detector
 
     # Latencia de procesamiento del servidor: lectura del frame -> frame anotado y codificado (últimos 100 frames)
     window = sorted(pipeline.latency_window)
@@ -730,9 +904,13 @@ def get_stats(request: Request):
         "processing_ms": processing_ms,
         "processing_p95_ms": processing_p95_ms,
         "fps": round(pipeline.fps, 1),
-        "device": device.upper(),
-        "weights_format": os.path.basename(weights_path).split('.')[-1].upper(),
-        "active_detections": pipeline.active_detections,
+        "device": detector.runtime.device.upper(),
+        "weights_format": detector.weights_format,
+        "profile": detector.summary(),
+        "profile_loading": pipeline.profile_loading is not None,
+        "items": pipeline.items,
+        "neutral": pipeline.neutral,
+        "violations": pipeline.violations,
         "safety_score": pipeline.safety_score,
         "conf_threshold": pipeline.conf_threshold,
         "infractions": infractions,
