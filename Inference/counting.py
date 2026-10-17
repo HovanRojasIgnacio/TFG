@@ -1,39 +1,18 @@
-"""Agrupa las clases del modelo en las categorías del panel y cuenta cada operario una sola vez.
+"""Cuenta, para cada elemento de protección del perfil, cuántos se llevan y cuántos faltan.
 
-El modelo desplegado marca a un mismo operario en varios niveles: la persona (person_with_helmet,
-person_no_helmet), la cabeza (head_with_helmet, head) y el propio casco (helmet). Si se contara cada
-recuadro, un operario con casco sumaría tres "cascos correctos". Por eso se cuenta cada cabeza y, además,
-cada persona en cuyo recuadro no hay ninguna cabeza detectada (un operario lejano o de espaldas del que
-solo se ve el cuerpo). El casco suelto no cuenta: ya lo representa la cabeza. Con un modelo sin esa
-jerarquía (por ejemplo, clases helmet / no_helmet) se cuenta cada recuadro.
+Qué significa cada clase lo dice el perfil (profiles.py). Algunos modelos marcan a un mismo operario en varios
+niveles: el de casco desplegado ve la persona (person_with_helmet, person_no_helmet), la cabeza
+(head_with_helmet, head) y el propio casco (helmet). Si se contara cada recuadro, un operario con casco sumaría
+tres "cascos correctos". Por eso, cuando el perfil asigna niveles, se cuenta cada cabeza y, además, cada persona
+en cuyo recuadro no hay ninguna cabeza detectada (un operario lejano o de espaldas del que solo se ve el cuerpo);
+las clases sin nivel (el casco suelto) no cuentan, porque ya las representa la cabeza. Si en el frame no hay
+ninguna clase con nivel (por ejemplo, un modelo Helmet / NoHelmet / Vest / NoVest) se cuenta cada recuadro.
 """
-from functools import lru_cache
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, NamedTuple, Optional, Sequence
 
-CATEGORIES = ("helmet", "no_helmet", "face")
+from profiles import Profile
+
 Box = Sequence[float]  # x1, y1, x2, y2
-
-
-@lru_cache(maxsize=None)
-def class_category(class_name: str) -> str:
-    """Categoría del panel de una clase: no_helmet (infracción), helmet (correcto) o face (neutral)."""
-    name = class_name.lower()
-    if "no_helmet" in name or name == "head":
-        return "no_helmet"
-    if "with_helmet" in name or name == "helmet":
-        return "helmet"
-    return "face"
-
-
-@lru_cache(maxsize=None)
-def worker_level(class_name: str):
-    """Nivel de la clase en la jerarquía del operario: 0 = cabeza, 1 = persona, None = otro objeto."""
-    name = class_name.lower()
-    if name == "head" or name.startswith("head_"):
-        return 0
-    if name.startswith("person_"):
-        return 1
-    return None
 
 
 def _contains(outer: Box, inner: Box) -> bool:
@@ -52,14 +31,16 @@ def _iou(a: Box, b: Box) -> float:
 DUPLICATE_IOU = 0.5  # Dos recuadros de persona que se solapan más que esto son el mismo operario
 
 
-def counted_flags(class_names: Sequence[str], boxes: Optional[Sequence[Box]] = None) -> List[bool]:
+def counted_flags(profile: Profile, class_names: Sequence[str],
+                  boxes: Optional[Sequence[Box]] = None) -> List[bool]:
     """Indica, para cada recuadro del frame, si cuenta en los contadores (un recuadro por operario).
 
     Con las coordenadas (`boxes`), cada operario se identifica por su posición: cuentan todas las cabezas y
     las personas sin ninguna cabeza dentro, salvo que se solapen con otra persona ya representada (el modelo
     a veces marca dos veces a la misma persona). Sin coordenadas se cuenta solo el nivel más detallado presente.
     """
-    levels = [worker_level(n) for n in class_names]
+    rules = [profile.rule(n) for n in class_names]
+    levels = [r.level for r in rules]
     hierarchy = any(lvl is not None for lvl in levels)
     heads = [boxes[i] for i, lvl in enumerate(levels) if lvl == 0] if boxes is not None else []
     frame_level = min((lvl for lvl in levels if lvl is not None), default=None)
@@ -67,17 +48,18 @@ def counted_flags(class_names: Sequence[str], boxes: Optional[Sequence[Box]] = N
     claimed = [boxes[i] for i, lvl in enumerate(levels)
                if lvl == 1 and any(_contains(boxes[i], h) for h in heads)] if boxes is not None else []
     flags = []
-    for i, (name, lvl) in enumerate(zip(class_names, levels)):
-        if class_category(name) == "face":
-            flags.append(not name.lower().startswith("person"))  # "person" sola no es un rostro
+    for i, (rule, lvl) in enumerate(zip(rules, levels)):
+        if rule.state in ("neutral", "ignore"):
+            flags.append(rule.state == "neutral")              # neutral se muestra; ignore no
         elif not hierarchy:
-            flags.append(True)                                 # modelo sin jerarquía: cada recuadro
+            flags.append(True)                                 # sin jerarquía: cada recuadro
         elif lvl == 0:
             flags.append(True)                                 # cada cabeza es un operario
         elif lvl == 1:
             if boxes is None:
                 flags.append(frame_level == 1)
-            elif any(_contains(boxes[i], h) for h in heads) or                     any(_iou(boxes[i], c) > DUPLICATE_IOU for c in claimed):
+            elif any(_contains(boxes[i], h) for h in heads) or \
+                    any(_iou(boxes[i], c) > DUPLICATE_IOU for c in claimed):
                 flags.append(False)                            # ya la representa su cabeza u otra persona
             else:
                 flags.append(True)
@@ -87,20 +69,43 @@ def counted_flags(class_names: Sequence[str], boxes: Optional[Sequence[Box]] = N
     return flags
 
 
-def count(class_names: Sequence[str], confs: Sequence[float],
-          boxes: Optional[Sequence[Box]] = None) -> Tuple[Dict[str, int], float, List[bool]]:
-    """Cuenta operarios con casco, sin casco y rostros.
+class Counts(NamedTuple):
+    items: Dict[str, Dict[str, int]]   # {elemento: {"ok": n, "missing": n}}
+    neutral: int
+    highest_violation: float           # Confianza máxima de una infracción (0 si no hay)
+    flags: List[bool]                  # Qué recuadros han contado (son los que se dibujan)
 
-    Devuelve los contadores, la confianza máxima de una infracción y qué recuadros han contado.
-    """
-    counts = {c: 0 for c in CATEGORIES}
-    highest_infraction = 0.0
-    flags = counted_flags(class_names, boxes)
+    @property
+    def violations(self) -> int:
+        return sum(c["missing"] for c in self.items.values())
+
+    @property
+    def safety_score(self) -> int:
+        """Porcentaje de elementos llevados sobre los contados; 100 si no se ha contado ninguno."""
+        ok = sum(c["ok"] for c in self.items.values())
+        total = ok + self.violations
+        return int(ok / total * 100) if total > 0 else 100
+
+
+def empty_items(profile: Profile) -> Dict[str, Dict[str, int]]:
+    return {item: {"ok": 0, "missing": 0} for item in profile.items}
+
+
+def count(profile: Profile, class_names: Sequence[str], confs: Sequence[float],
+          boxes: Optional[Sequence[Box]] = None) -> Counts:
+    """Cuenta los elementos llevados y los que faltan, los recuadros neutrales y la confianza de la infracción."""
+    items = empty_items(profile)
+    neutral = 0
+    highest = 0.0
+    flags = counted_flags(profile, class_names, boxes)
     for name, conf, counted in zip(class_names, confs, flags):
         if not counted:
             continue
-        category = class_category(name)
-        counts[category] += 1
-        if category == "no_helmet":
-            highest_infraction = max(highest_infraction, conf)
-    return counts, highest_infraction, flags
+        rule = profile.rule(name)
+        if rule.state == "neutral":
+            neutral += 1
+            continue
+        items[rule.item][rule.state] += 1
+        if rule.state == "missing":
+            highest = max(highest, conf)
+    return Counts(items, neutral, highest, flags)

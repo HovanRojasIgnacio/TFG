@@ -1,0 +1,15 @@
+{
+  "name": "Casco",
+  "items": {"helmet": "Casco"},
+  "classes": {
+    "head":               {"item": "helmet", "state": "missing", "level": "head"},
+    "head_with_helmet":   {"item": "helmet", "state": "ok",      "level": "head"},
+    "person_no_helmet":   {"item": "helmet", "state": "missing", "level": "person"},
+    "person_with_helmet": {"item": "helmet", "state": "ok",      "level": "person"},
+    "helmet":             {"item": "helmet", "state": "ok"},
+    "face":               {"state": "neutral", "label": "Rostro"},
+    "person":             {"state": "ignore"}
+  },
+  "conf": 0.325,
+  "source": "YOLO26s de siete clases entrenado el 28 de mayo de 2026. No se conservaron el registro ni el dataset de ese entrenamiento (capítulo 7 de la memoria)."
+}
