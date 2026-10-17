@@ -1,10 +1,13 @@
-"""Compara la precisión de best.pt (PyTorch, referencia) con la del motor TensorRT (best.engine).
+"""Compara la precisión de best.pt (PyTorch, referencia) con la del motor TensorRT (best.engine) de un modo.
 
 Hay que ejecutarlo con tu conjunto de validación real antes de citar cifras de precisión:
 
     python validate_model.py --data ruta/a/yolo_dataset/dataset.yaml
     python validate_model.py --data ruta/a/dataset.yaml --split test
     python validate_model.py --images ruta/a/carpeta_de_imagenes      # solo concordancia, sin etiquetas
+    python validate_model.py --profile casco_chaleco --data ruta/a/dataset.yaml --split test
+
+--profile Modo de detección (carpeta de Inference/profiles); por defecto, casco.
 
 --data    Ejecuta la validación de Ultralytics con ambos modelos y muestra precisión, recall, mAP50 y
           mAP50-95 (global y por clase). Debe ser el dataset con el que se entrenó best.pt.
@@ -24,19 +27,19 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 from ultralytics import YOLO
 
 import counting
+import profiles
 from runtime import build_engine, engine_is_stale, require_cuda
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
 
-def load_models():
+def load_models(base_dir):
     require_cuda()
-    pt = os.path.join(current_dir, "best.pt")
-    engine = os.path.join(current_dir, "best.engine")
+    pt = os.path.join(base_dir, "best.pt")
+    engine = os.path.join(base_dir, "best.engine")
     if not os.path.exists(pt):
         raise SystemExit(f"Falta {pt}: es la referencia de la comparación.")
-    if (not os.path.exists(engine) or engine_is_stale(current_dir)) and not build_engine(current_dir):
+    if (not os.path.exists(engine) or engine_is_stale(base_dir)) and not build_engine(base_dir):
         raise SystemExit("No hay un best.engine actual y no se pudo generar (¿falta requirements-tensorrt.txt?).")
     return YOLO(pt, task="detect"), YOLO(engine, task="detect")
 
@@ -83,14 +86,14 @@ def _iou(a, b):
     return inter / union if union else 0
 
 
-def _is_violation(dets):
+def _is_violation(profile, dets):
     # Misma regla que execute.py: cada operario cuenta una vez (véase counting.py)
-    counts, _, _ = counting.count([c for c, _, _ in dets], [conf for _, conf, _ in dets],
-                                  [box for _, _, box in dets])
-    return counts["no_helmet"] > 0
+    counts = counting.count(profile, [c for c, _, _ in dets], [conf for _, conf, _ in dets],
+                            [box for _, _, box in dets])
+    return counts.violations > 0
 
 
-def report_agreement(pt_model, engine_model, folder):
+def report_agreement(profile, pt_model, engine_model, folder):
     images = sorted(p for p in glob.glob(os.path.join(folder, "**", "*"), recursive=True)
                     if p.lower().endswith(IMAGE_EXTENSIONS))
     if not images:
@@ -118,7 +121,7 @@ def report_agreement(pt_model, engine_model, folder):
             else:
                 missed += 1
         extra += len(out) - len(used)
-        flips += _is_violation(ref) != _is_violation(out)
+        flips += _is_violation(profile, ref) != _is_violation(profile, out)
     mean_diff = sum(conf_diffs) / max(len(conf_diffs), 1)
     print(f"\nConcordancia del motor frente a best.pt (FP32) en {len(images)} imágenes de {folder}")
     print(f"  detecciones de referencia : {total_ref}")
@@ -131,6 +134,7 @@ def report_agreement(pt_model, engine_model, folder):
 
 def main():
     parser = argparse.ArgumentParser(description="Compara best.pt con best.engine")
+    parser.add_argument("--profile", default="casco", help="modo de detección (carpeta de Inference/profiles)")
     parser.add_argument("--data", help="dataset.yaml con el que se entrenó el modelo (calcula mAP)")
     parser.add_argument("--split", default="val", help="partición del dataset: val o test")
     parser.add_argument("--images", help="carpeta de imágenes para comparar detecciones (sin etiquetas)")
@@ -138,11 +142,14 @@ def main():
     if not args.data and not args.images:
         parser.error("indica --data y/o --images")
 
-    pt_model, engine_model = load_models()
+    profile = profiles.load(args.profile)
+    pt_model, engine_model = load_models(profile.base_dir)
+    profiles.check_model(profile, pt_model.names)
+    print(f"Modo: {profile.name} ({profile.base_dir})")
     if args.data:
         report_map(pt_model, engine_model, args.data, args.split)
     if args.images:
-        report_agreement(pt_model, engine_model, args.images)
+        report_agreement(profile, pt_model, engine_model, args.images)
 
 
 if __name__ == "__main__":
