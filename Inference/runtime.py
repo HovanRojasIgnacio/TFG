@@ -138,6 +138,14 @@ def engine_is_stale(base_dir: str) -> bool:
     return built_from != _weights_digest(pt)
 
 
+def engine_needed(base_dir: str) -> bool:
+    """True si load_model() tendría que generar el motor TensorRT (falta o no corresponde a best.pt)."""
+    pt, engine = os.path.join(base_dir, "best.pt"), os.path.join(base_dir, "best.engine")
+    if not (os.path.exists(pt) and _tensorrt_available()):
+        return False
+    return not os.path.exists(engine) or engine_is_stale(base_dir)
+
+
 def _load(path: str):
     """Carga los pesos y hace una inferencia de prueba para detectar motores incompatibles."""
     from ultralytics import YOLO
