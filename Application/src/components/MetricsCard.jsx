@@ -4,7 +4,10 @@ function getSafetyColor(score) {
   return "#ef4444";
 }
 
-export default function MetricsCard({ isActive, fps, safetyScore, detections }) {
+export default function MetricsCard({ isActive, fps, safetyScore, items, itemNames, neutral }) {
+  // Una fila por elemento de protección del modo actual (casco, chaleco...), en el orden del perfil
+  const rows = Object.entries(items || {});
+
   return (
     <div className="card stats-card">
       <h3>Métricas de Inferencia</h3>
@@ -24,17 +27,19 @@ export default function MetricsCard({ isActive, fps, safetyScore, detections }) 
       </div>
 
       <div className="counter-list">
-        <div className="counter-item border-green">
-          <span>Cascos Correctos:</span>
-          <span className="counter-val text-green">{detections?.helmet ?? 0}</span>
-        </div>
-        <div className="counter-item border-red">
-          <span>Infracciones Críticas:</span>
-          <span className="counter-val text-red">{detections?.no_helmet ?? 0}</span>
-        </div>
+        {rows.map(([item, count]) => (
+          <div className={`counter-item ${count.missing > 0 ? "border-red" : "border-green"}`} key={item}>
+            <span>{itemNames?.[item] ?? item}:</span>
+            <span>
+              <span className="counter-val text-green">{count.ok}</span> correctos
+              {" / "}
+              <span className="counter-val text-red">{count.missing}</span> sin
+            </span>
+          </div>
+        ))}
         <div className="counter-item border-orange">
-          <span>Rostros Neutrales:</span>
-          <span className="counter-val text-orange">{detections?.face ?? 0}</span>
+          <span>Detecciones Neutrales:</span>
+          <span className="counter-val text-orange">{neutral ?? 0}</span>
         </div>
       </div>
     </div>

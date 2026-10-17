@@ -4,6 +4,7 @@ import { useTelemetry } from './hooks/useTelemetry';
 import { useAlarm } from './hooks/useAlarm';
 import { useCameras } from './hooks/useCameras';
 import { useConfidence } from './hooks/useConfidence';
+import { useProfiles } from './hooks/useProfiles';
 import VideoCard from './components/VideoCard';
 import ControlPanel from './components/ControlPanel';
 import MetricsCard from './components/MetricsCard';
@@ -19,13 +20,14 @@ function App() {
   const { soundEnabled, toggleSound, beep } = useAlarm();
 
   const [telemetry, setTelemetry, backendOnline] = useTelemetry(isActive, (data) => {
-    if (soundEnabled && data.active_detections?.no_helmet > 0) {
+    if (soundEnabled && data.violations > 0) {
       beep();
     }
   });
 
   const confidence = useConfidence(setTelemetry);
   const cameras = useCameras(setTelemetry, () => setCameraModalOpen(false));
+  const profiles = useProfiles(backendOnline, telemetry.profile_loading);
 
   return (
     <div className="app-container">
@@ -50,7 +52,7 @@ function App() {
         <VideoCard
           isActive={isActive}
           onToggleActive={() => setIsActive(!isActive)}
-          hasInfraction={telemetry.active_detections?.no_helmet > 0}
+          hasInfraction={telemetry.violations > 0}
           device={telemetry.device}
           weightsFormat={telemetry.weights_format}
           backendOnline={backendOnline}
@@ -69,12 +71,16 @@ function App() {
               cameras.loadCameras();
               setCameraModalOpen(true);
             }}
+            profiles={profiles}
+            onSelectProfile={profiles.selectProfile}
           />
           <MetricsCard
             isActive={isActive}
             fps={telemetry.fps}
             safetyScore={telemetry.safety_score}
-            detections={telemetry.active_detections}
+            items={telemetry.items}
+            itemNames={telemetry.profile?.items}
+            neutral={telemetry.neutral}
           />
         </div>
       </main>

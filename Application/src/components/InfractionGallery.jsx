@@ -23,6 +23,7 @@ export default function InfractionGallery({ infractions, onView }) {
               </div>
               <div className="item-info">
                 <div className="info-top">
+                  {inf.profile && <span className="info-profile">{inf.profile}</span>}
                   <span className="info-conf">Conf: {(inf.confidence * 100).toFixed(0)}%</span>
                 </div>
                 <p>{inf.details}</p>
