@@ -33,6 +33,8 @@ __pycache__/
 # Motores TensorRT: dependen de la GPU y de la versión de TensorRT; se generan con export.py
 *.engine
 *.engine.source
+# Exportaciones ONNX de cada modo (export.py; se regeneran a partir de best.pt)
+Inference/profiles/*/best.onnx
 
 # Documentation build output and temporary review files
 Documentation/_*

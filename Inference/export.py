@@ -1,3 +1,12 @@
+"""Exporta los pesos de un modo de detección a ONNX y a TensorRT (best.engine), en su misma carpeta.
+
+    python export.py                          # modo casco
+    python export.py --profile casco_chaleco  # genera el motor antes de elegir el modo desde el panel
+
+El servidor genera el motor por su cuenta la primera vez que carga un modo (alrededor de un minuto, con menos
+FPS mientras tanto); hacerlo antes con este script deja el cambio de modo en unos segundos.
+"""
+import argparse
 import os
 import venv_bootstrap
 if __name__ == "__main__":
@@ -5,10 +14,11 @@ if __name__ == "__main__":
 # Ultralytics no debe instalar paquetes por su cuenta con pip (puede modificar el Python global)
 os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 from ultralytics import YOLO
+import profiles
 from runtime import build_engine, require_cuda
 
-def exportar_modelo():
-    current_dir = os.path.dirname(os.path.abspath(__file__))
+def exportar_modelo(profile_id):
+    current_dir = profiles.load(profile_id).base_dir
     weights_path = os.path.join(current_dir, "best.pt")
 
     if not os.path.exists(weights_path):
@@ -33,4 +43,6 @@ def exportar_modelo():
         print("El servidor usará best.pt en la GPU.")
 
 if __name__ == "__main__":
-    exportar_modelo()
+    parser = argparse.ArgumentParser(description="Exporta un modo de detección a ONNX y TensorRT")
+    parser.add_argument("--profile", default="casco", help="modo de detección (carpeta de Inference/profiles)")
+    exportar_modelo(parser.parse_args().profile)

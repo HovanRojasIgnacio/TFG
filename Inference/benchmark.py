@@ -4,6 +4,7 @@ Uso:
     python benchmark.py                      # frames sintéticos 640x480
     python benchmark.py --source video.mp4   # frames de un vídeo
     python benchmark.py --frames 300 --warmup 20
+    python benchmark.py --profile casco_chaleco  # otro modo de detección (carpeta de Inference/profiles)
 """
 import argparse
 import os
@@ -20,9 +21,8 @@ import cv2
 import numpy as np
 import torch
 
+import profiles
 from runtime import load_model, precision_kwargs
-
-current_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 def frame_source(source, total: int):
@@ -59,11 +59,13 @@ def main():
     parser.add_argument("--frames", type=int, default=200, help="Frames medidos")
     parser.add_argument("--warmup", type=int, default=10, help="Frames de calentamiento (no medidos)")
     parser.add_argument("--conf", type=float, default=0.325)
+    parser.add_argument("--profile", default="casco", help="modo de detección (carpeta de Inference/profiles)")
     args = parser.parse_args()
 
     # Misma carga que execute.py (solo GPU; genera el motor TensorRT si falta)
-    model, (weights, device, half) = load_model(current_dir)
-    print(f"Modelo: {os.path.basename(weights)} | Dispositivo: {device} ({torch.cuda.get_device_name(0)}) | half={half}")
+    profile = profiles.load(args.profile)
+    model, (weights, device, half) = load_model(profile.base_dir)
+    print(f"Modo: {profile.name} | Modelo: {os.path.basename(weights)} | Dispositivo: {device} ({torch.cuda.get_device_name(0)}) | half={half}")
 
     latencies = []
     for i, frame in enumerate(frame_source(args.source, args.warmup + args.frames)):
