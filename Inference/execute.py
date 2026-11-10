@@ -15,6 +15,7 @@ import asyncio
 import gc
 import logging
 import re
+import secrets
 import subprocess
 import sys
 import cv2
@@ -636,7 +637,8 @@ class VideoPipeline:
         # Registro de infracciones
         if current_mode and counts.violations > 0 and \
                 (current_time - self.last_infraction_save) > self.save_cooldown:
-            filename = f"inf_{int(current_time)}.jpg"
+            # /static no tiene autenticación: el sufijo aleatorio impide adivinar la dirección de una captura
+            filename = f"inf_{int(current_time)}_{secrets.token_hex(8)}.jpg"
             filepath = os.path.join(infractions_dir, filename)
             self.last_infraction_save = current_time
             if not cv2.imwrite(filepath, frame):
