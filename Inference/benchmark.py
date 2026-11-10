@@ -58,19 +58,20 @@ def main():
     parser.add_argument("--source", help="Ruta a un vídeo (por defecto, frames sintéticos)")
     parser.add_argument("--frames", type=int, default=200, help="Frames medidos")
     parser.add_argument("--warmup", type=int, default=10, help="Frames de calentamiento (no medidos)")
-    parser.add_argument("--conf", type=float, default=0.325)
+    parser.add_argument("--conf", type=float, help="umbral de confianza (por defecto, el del perfil)")
     parser.add_argument("--profile", default="casco", help="modo de detección (carpeta de Inference/profiles)")
     args = parser.parse_args()
 
     # Misma carga que execute.py (solo GPU; genera el motor TensorRT si falta)
     profile = profiles.load(args.profile)
+    conf = args.conf or profile.conf or 0.325
     model, (weights, device, half) = load_model(profile.base_dir)
     print(f"Modo: {profile.name} | Modelo: {os.path.basename(weights)} | Dispositivo: {device} ({torch.cuda.get_device_name(0)}) | half={half}")
 
     latencies = []
     for i, frame in enumerate(frame_source(args.source, args.warmup + args.frames)):
         start = time.perf_counter()
-        model.predict(frame, device=device, conf=args.conf, verbose=False, **precision_kwargs(half))
+        model.predict(frame, device=device, conf=conf, verbose=False, **precision_kwargs(half))
         elapsed = (time.perf_counter() - start) * 1000
         if i >= args.warmup:
             latencies.append(elapsed)
