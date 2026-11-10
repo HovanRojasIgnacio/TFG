@@ -55,6 +55,27 @@ class CascoRegressionTest(unittest.TestCase):
                 self._check(frame, result, "counts_no_boxes", "flags_no_boxes")
 
 
+class CascoHierarchyTest(unittest.TestCase):
+    def setUp(self):
+        self.profile = profiles.load("casco")
+
+    def test_loose_helmet_is_not_a_worker(self):
+        for boxes in ([[10, 10, 50, 50]], None):
+            with self.subTest(boxes=boxes):
+                result = counting.count(self.profile, ["helmet"], [0.9], boxes)
+                self.assertEqual(result.items, {"helmet": {"ok": 0, "missing": 0}})
+                self.assertEqual(result.flags, [False])
+
+    def test_overlapping_worker_keeps_their_violation(self):
+        # La cabeza con casco de A cae también dentro del recuadro de B (sin casco, sin cabeza detectada)
+        names = ["head_with_helmet", "person_with_helmet", "person_no_helmet"]
+        boxes = [[100, 100, 140, 140], [80, 95, 160, 300], [110, 60, 260, 300]]
+        result = counting.count(self.profile, names, [0.9, 0.9, 0.8], boxes)
+        self.assertEqual(result.items, {"helmet": {"ok": 1, "missing": 1}})
+        self.assertEqual(result.flags, [True, False, True])
+        self.assertEqual(result.highest_violation, 0.8)
+
+
 class VestProfileTest(unittest.TestCase):
     def setUp(self):
         self.profile = profiles.parse("casco_chaleco", VEST_PROFILE)
