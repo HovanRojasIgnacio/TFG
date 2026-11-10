@@ -1,16 +1,28 @@
-# React + Vite
+# GuardWatch AI — panel de control
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Panel web (React 19 + Vite 8) del sistema de vigilancia de EPIs. Muestra el vídeo anotado, los contadores por elemento de protección y las infracciones guardadas, y permite cambiar el modo de detección, el umbral de confianza y la cámara. La instalación completa y el backend están descritos en el [README de la raíz](../README.md).
 
-Currently, two official plugins are available:
+## Comandos
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Desde esta carpeta, después de `npm install`:
 
-## React Compiler
+| Comando | Qué hace |
+|---|---|
+| `npm run dev` | Servidor de desarrollo en `http://localhost:5173/TFG/`. |
+| `npm run lint` | Comprueba el código con ESLint. |
+| `npm run build` | Genera la versión de producción en `dist/`. |
+| `npm run preview` | Sirve `dist/` en `http://localhost:4173/TFG/`. |
+| `npm run deploy` | Compila y publica `dist/` en GitHub Pages. |
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Configuración
 
-## Expanding the ESLint configuration
+- **Backend:** por defecto `http://localhost:8000`. Para usar otro, crea `.env` con `VITE_API_BASE=http://direccion:8000` antes de `npm run dev` o `npm run build`.
+- **Tiempos:** el intervalo de sondeo, el de la alarma y los tiempos máximos de las peticiones están en `src/config.js`.
+- **Ruta base:** `/TFG/`, definida en `vite.config.js` para GitHub Pages.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Estructura
+
+- `src/App.jsx`: composición del panel.
+- `src/components/`: vídeo, consola de control, métricas, galería de infracciones y diálogos.
+- `src/hooks/`: telemetría (`/api/stats`), cámaras, modos de detección, umbral, alarma y foco de los diálogos.
+- `src/config.js`: dirección del backend y constantes de tiempo.
