@@ -11,9 +11,9 @@ La arquitectura se divide en:
 ## 🛠️ Requisitos Previos
 
 Antes de comenzar, asegúrate de tener instalado lo siguiente en tu sistema Windows:
-1.  **Python 3.10 o superior** (Asegúrate de marcar "Add Python to PATH" en la instalación).
-2.  **Node.js (Versión LTS)** (Para la gestión y ejecución de React).
-3.  **CUDA Toolkit y cuDNN** (Altamente recomendado para habilitar el soporte de tu tarjeta gráfica RTX).
+1.  **Una GPU NVIDIA con el controlador actualizado** (compatible con CUDA 13). Es obligatoria: el servidor no arranca sin ella, no existe modo CPU. No hace falta instalar CUDA Toolkit ni cuDNN aparte, porque los paquetes de PyTorch ya los incluyen.
+2.  **Python 3.14** (la versión probada; marca "Add Python to PATH" en la instalación). Las versiones fijadas en `requirements.txt` no se han probado con otras.
+3.  **Node.js 22 o superior** (versión LTS), para instalar y ejecutar el panel de React.
 
 ---
 
@@ -87,7 +87,7 @@ El frontend se levantará en el navegador en la dirección: http://localhost:517
 ## Despliegue en GitHub Pages
 La interfaz de usuario está configurada para compilarse y alojarse directamente de forma estática en GitHub. Si realizas cambios en el diseño de tu app de React y quieres actualizar la versión online, ejecuta desde la carpeta Application:
 
-```Bash
+```bash
 npm run deploy
 ```
 La plataforma se empaquetará de forma automática y los cambios se verán reflejados en tu enlace público definitivo:
@@ -96,6 +96,31 @@ La plataforma se empaquetará de forma automática y los cambios se verán refle
 Para apuntar la interfaz a otro backend, define la variable `VITE_API_BASE` (por ejemplo en `Application/.env`: `VITE_API_BASE=http://192.168.1.50:8000`) antes de ejecutar `npm run dev` o `npm run build`. El backend solo acepta peticiones del navegador desde las direcciones del panel (`http://localhost:5173`, `http://localhost:4173` y la versión de GitHub Pages); si el panel se sirve desde otra dirección, añádela al arrancar el backend con `GUARDWATCH_ORIGINS` (por ejemplo, `$env:GUARDWATCH_ORIGINS = "http://192.168.1.50:5173"`).
 
 Nota Técnica: Al acceder desde tu enlace público de GitHub Pages, la aplicación de React intentará conectarse con el motor local (localhost:8000). Por lo tanto, el recuadro de vídeo se activará únicamente si tienes encendido el backend localmente ejecutando python execute.py en tu PC.
+
+## Variables de entorno
+
+Todas son opcionales. Las del backend se definen antes de `python execute.py` (en PowerShell, `$env:NOMBRE = "valor"`).
+
+| Variable | Por defecto | Efecto |
+|---|---|---|
+| `GUARDWATCH_HOST` | `0.0.0.0` | Dirección en la que escucha el backend; `127.0.0.1` lo limita a este equipo. |
+| `GUARDWATCH_PROFILE` | `casco` | Modo de detección con el que arranca. |
+| `GUARDWATCH_ORIGINS` | (vacío) | Direcciones adicionales del panel que el backend acepta, separadas por comas. |
+| `GUARDWATCH_SNAPSHOT_DAYS` | `30` | Días que se conservan las capturas de infracciones. |
+| `GUARDWATCH_NO_VENV` | (sin definir) | Con `1`, los scripts no cambian a `Inference/.venv` y usan el Python actual. |
+| `VITE_API_BASE` | `http://localhost:8000` | Dirección del backend que usa el panel (en `Application/.env`). |
+
+## Pruebas
+
+```bash
+python -m unittest discover -s Inference/tests
+```
+
+```bash
+cd Application && npm run lint && npm run build
+```
+
+Las pruebas del backend cubren el recuento y los perfiles; solo usan la biblioteca estándar, así que no necesitan GPU ni el entorno virtual. El resto del backend no tiene pruebas automáticas. GitHub Actions ejecuta ambas comprobaciones en cada push (`.github/workflows/ci.yml`).
 
 ## Modos de detección
 
