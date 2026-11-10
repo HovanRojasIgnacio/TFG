@@ -104,7 +104,7 @@ def _build_engine_apart(base_dir: str) -> None:
     """Genera el motor TensorRT en otro proceso.
 
     Con el servidor en marcha, la exportación (ONNX, ModelOpt) dentro de este proceso compite por el GIL con el
-    hilo de vídeo y lo congela varios segundos. Si falla, load_model() lo intenta de nuevo o usa best.pt.
+    hilo de vídeo y lo congela varios segundos. Si falla, load_model(build=False) usa best.pt.
     """
     code = "import sys, runtime; sys.exit(0 if runtime.build_engine(sys.argv[1]) else 1)"
     result = subprocess.run([sys.executable, "-c", code, base_dir], cwd=current_dir)
@@ -124,7 +124,7 @@ def load_detector(profile_id: str, build_apart: bool = False) -> Detector:
         logger.info("Generando el motor TensorRT de %s en otro proceso (tarda aproximadamente un minuto)...",
                     profile.name)
         _build_engine_apart(profile.base_dir)
-    model, runtime = load_model(profile.base_dir)
+    model, runtime = load_model(profile.base_dir, build=not build_apart)
     detector = Detector(profile, model, runtime)
     logger.info("Perfil: %s | modelo: %s | dispositivo: %s | FP16: %s", profile.name,
                 os.path.basename(runtime.weights_path), runtime.device, runtime.half)
