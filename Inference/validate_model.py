@@ -74,8 +74,8 @@ def report_map(pt_model, engine_model, data, split):
         print(f"{names[int(cls)]:22} {pt_v:>8.3f} {en_v:>8.3f} {en_v - pt_v:>+8.3f}")
 
 
-def _predict(model, path, **kw):
-    r = model.predict(path, device="cuda", conf=0.325, verbose=False, **kw)[0]
+def _predict(model, path, conf, **kw):
+    r = model.predict(path, device="cuda", conf=conf, verbose=False, **kw)[0]
     return [(model.names[int(b.cls[0])], float(b.conf[0]), b.xyxy[0].tolist()) for b in r.boxes]
 
 
@@ -98,12 +98,13 @@ def report_agreement(profile, pt_model, engine_model, folder):
                     if p.lower().endswith(IMAGE_EXTENSIONS))
     if not images:
         raise SystemExit(f"No hay imágenes en {folder}")
+    conf = profile.conf or 0.325  # El mismo umbral con el que arranca el servidor en este modo
     matched = missed = extra = flips = 0
     conf_diffs = []
     total_ref = 0
     for path in images:
-        ref = _predict(pt_model, path, **fp32_kwargs())  # best.pt en FP32 (referencia)
-        out = _predict(engine_model, path)
+        ref = _predict(pt_model, path, conf, **fp32_kwargs())  # best.pt en FP32 (referencia)
+        out = _predict(engine_model, path, conf)
         total_ref += len(ref)
         used = set()
         for cls, conf, box in ref:
