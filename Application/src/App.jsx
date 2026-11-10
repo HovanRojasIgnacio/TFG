@@ -31,24 +31,34 @@ function App() {
 
   return (
     <div className="app-container">
+      <a className="skip-link" href="#contenido">Saltar al contenido</a>
       <header className="app-header">
         <div className="header-logo">
-          <span className="shield-icon">🛡️</span>
+          <span className="shield-icon" aria-hidden="true">🛡️</span>
           <div>
-            <h1>GuardWatch AI</h1>
-            <p className="subtitle">Inspección de EPIs en Tiempo Real — YOLO26s</p>
+            <h1 lang="en">GuardWatch AI</h1>
+            <p className="subtitle">
+              Inspección de <abbr title="Equipos de Protección Individual">EPIs</abbr> en Tiempo Real — YOLO26s
+            </p>
           </div>
         </div>
         <div className="header-badge">TRABAJO FIN DE GRADO</div>
       </header>
 
+      {/* Aviso para lectores de pantalla cuando aparece o desaparece una infracción (WCAG 4.1.3) */}
+      <p className="sr-only" role="status">
+        {isActive && telemetry.violations > 0
+          ? "Atención: falta un elemento de protección en la imagen."
+          : "Sin infracciones en la imagen."}
+      </p>
+
       {isActive && backendOnline === false && (
         <div className="connection-banner" role="alert">
-          ⚠ Sin conexión con el servidor de inferencia. Los datos mostrados pueden no estar actualizados; reintentando…
+          <span aria-hidden="true">⚠ </span>Sin conexión con el servidor. Los datos pueden no estar al día. Se está reintentando…
         </div>
       )}
 
-      <main className="main-content">
+      <main className="main-content" id="contenido" tabIndex={-1}>
         <VideoCard
           isActive={isActive}
           onToggleActive={() => setIsActive(!isActive)}
@@ -105,7 +115,7 @@ function App() {
       )}
 
       <footer className="app-footer">
-        <p>Sistema de videovigilancia adaptado para control de accesos e inspección de equipos de protección individual en obra.</p>
+        <p>Sistema de videovigilancia que comprueba el uso de los equipos de protección individual en una obra.</p>
       </footer>
     </div>
   );
