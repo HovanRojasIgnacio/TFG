@@ -1,14 +1,17 @@
 :root {
+  /* Los colores de texto dan un contraste de 7:1 o más sobre --bg-card, el fondo más claro (WCAG 1.4.6, AAA) */
   --bg-base: #0f172a;
   --bg-card: #1e293b;
   --border-color: #334155;
   --text-main: #f8fafc;
-  --text-muted: #94a3b8;
-  --accent: #38bdf8;
-  --danger: #ef4444;
-  --danger-text: #fca5a5; /* Texto rojo sobre el fondo rojo translúcido (contraste >= 4.5:1) */
-  --success: #10b981;
-  --warning: #f59e0b;
+  --text-muted: #cbd5e1;
+  --accent: #7dd3fc;
+  --accent-bg: #38bdf8;   /* Fondo de los botones principales, con texto negro */
+  --danger: #ef4444;      /* Solo bordes e indicadores; para texto, --danger-text */
+  --danger-text: #fecaca;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --target: 2.75rem;      /* 44 px: tamaño mínimo de un control (WCAG 2.5.5, AAA) */
 }
 
 * {
@@ -22,6 +25,64 @@ body {
   background-color: var(--bg-base);
   color: var(--text-main);
   min-height: 100vh;
+  line-height: 1.5;
+}
+
+/* Texto solo para lectores de pantalla */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Enlace para saltar la cabecera: visible solo al recibir el foco */
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -4rem;
+  padding: 0.6rem 1rem;
+  background-color: var(--accent-bg);
+  color: #000;
+  font-weight: 700;
+  border-radius: 6px;
+  z-index: 200;
+  display: inline-flex;
+  align-items: center;
+}
+
+.skip-link:focus {
+  top: 0.5rem;
+}
+
+/* Foco de teclado visible en todos los controles */
+:focus-visible {
+  outline: 3px solid var(--text-main);
+  outline-offset: 2px;
+}
+
+button, select, input[type="text"], .skip-link {
+  min-height: var(--target);
+  font-size: 0.9rem;
+}
+
+abbr[title] {
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+/* Títulos de las tarjetas y de los diálogos: nivel 2, y nivel 3 dentro de ellos */
+.card h2, .modal-content h2 {
+  font-size: 1.17rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
 .app-container {
@@ -57,14 +118,14 @@ body {
 }
 
 .header-badge {
-  background-color: #1e3a5f;
+  background-color: var(--bg-base);
   color: var(--accent);
   padding: 0.4rem 0.8rem;
   border-radius: 6px;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.05em;
-  border: 1px solid #2563eb;
+  border: 1px solid var(--accent);
 }
 
 .main-content {
@@ -126,7 +187,7 @@ body {
 }
 
 .hardware-pill, .format-pill {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   padding: 0.2rem 0.6rem;
   border-radius: 4px;
   background-color: #0f172a;
@@ -178,19 +239,19 @@ body {
 }
 
 .control-btn.danger {
-  background-color: #dc2626; /* más oscuro que --danger: texto blanco con contraste >= 4.5:1 */
+  background-color: #991b1b; /* texto blanco con contraste >= 7:1 */
   color: #fff;
 }
 
 .control-btn.success {
-  background-color: var(--success);
+  background-color: #10b981;
   color: #000;
 }
 
 .retry-btn {
   margin-top: 0.75rem;
   padding: 0.4rem 0.8rem;
-  background-color: var(--accent);
+  background-color: var(--accent-bg);
   color: #000;
   border: none;
   border-radius: 4px;
@@ -223,13 +284,16 @@ body {
 
 .modern-slider {
   width: 100%;
-  accent-color: var(--accent);
+  height: var(--target);
+  accent-color: var(--accent-bg);
+  cursor: pointer;
 }
 
 .slider-desc {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
   margin-top: 0.3rem;
+  max-width: 80ch;
 }
 
 .control-row {
@@ -241,8 +305,9 @@ body {
 .switch {
   position: relative;
   display: inline-block;
-  width: 44px;
-  height: 24px;
+  flex-shrink: 0;
+  width: var(--target);
+  height: var(--target); /* zona pulsable de 44 x 44; el interruptor se dibuja centrado */
 }
 
 .switch input {
@@ -254,8 +319,9 @@ body {
 .slider-switch {
   position: absolute;
   cursor: pointer;
-  inset: 0;
+  inset: 10px 0;
   background-color: #334155;
+  border: 1px solid var(--text-muted);
   border-radius: 24px;
   transition: 0.3s;
 }
@@ -263,8 +329,8 @@ body {
 .slider-switch:before {
   position: absolute;
   content: "";
-  height: 18px;
-  width: 18px;
+  height: 16px;
+  width: 16px;
   left: 3px;
   bottom: 3px;
   background-color: white;
@@ -273,12 +339,12 @@ body {
 }
 
 input:checked + .slider-switch {
-  background-color: var(--accent);
+  background-color: var(--accent-bg);
 }
 
 /* The real checkbox is invisible, so its keyboard focus is drawn on the visible switch */
 .switch input:focus-visible + .slider-switch {
-  outline: 2px solid var(--accent);
+  outline: 3px solid var(--text-main);
   outline-offset: 2px;
 }
 
@@ -303,7 +369,7 @@ input:checked + .slider-switch:before {
 
 .metric-title {
   display: block;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
 }
 
@@ -337,7 +403,7 @@ input:checked + .slider-switch:before {
 .border-orange { border-left-color: var(--warning); }
 
 .text-green { color: var(--success); font-weight: 700; }
-.text-red { color: var(--danger); font-weight: 700; }
+.text-red { color: var(--danger-text); font-weight: 700; }
 .text-orange { color: var(--warning); font-weight: 700; }
 
 .infractions-section .section-header {
@@ -392,7 +458,7 @@ input:checked + .slider-switch:before {
   background-color: rgba(0, 0, 0, 0.7);
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
 }
 
 .item-info {
@@ -409,8 +475,8 @@ input:checked + .slider-switch:before {
 }
 
 .info-conf {
-  font-size: 0.75rem;
-  color: var(--danger);
+  font-size: 0.8rem;
+  color: var(--danger-text);
   font-weight: 600;
 }
 
@@ -427,11 +493,12 @@ input:checked + .slider-switch:before {
   color: var(--accent);
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: 0.85rem;
 }
 
 .view-btn:hover {
-  background-color: #334155;
+  background-color: var(--bg-base);
+  border-color: var(--accent);
 }
 
 .modal-overlay {
@@ -461,11 +528,13 @@ input:checked + .slider-switch:before {
 
 .modal-close {
   position: absolute;
-  top: 5px;
-  right: 12px;
+  top: 0;
+  right: 0;
+  width: var(--target);
+  height: var(--target);
   font-size: 1.5rem;
   line-height: 1;
-  padding: 0 4px;
+  padding: 0;
   background: none;
   border: none;
   cursor: pointer;
@@ -477,19 +546,26 @@ input:checked + .slider-switch:before {
 }
 
 .modal-close:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 2px;
+  outline-offset: -3px;
+}
+
+.modal-content h2 {
+  padding-right: var(--target); /* deja sitio al botón de cerrar */
 }
 
 .modal-meta {
   margin-top: 0.5rem;
-  font-size: 0.8rem;
+  padding-right: var(--target);
+  font-size: 0.85rem;
   color: var(--text-muted);
 }
 
 .app-footer {
   text-align: center;
-  font-size: 0.75rem;
+  max-width: 80ch;   /* líneas de 80 caracteres como máximo (WCAG 1.4.8) */
+  width: 100%;
+  margin: 0 auto;
+  font-size: 0.8rem;
   color: var(--text-muted);
   border-top: 1px solid var(--border-color);
   padding-top: 1rem;
@@ -518,7 +594,7 @@ input:checked + .slider-switch:before {
 
 .camera-chevron {
   margin-left: auto;
-  font-size: 0.7rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
 }
 
@@ -562,14 +638,14 @@ input:checked + .slider-switch:before {
   margin-bottom: 1.5rem;
 }
 
-.camera-section h4 {
+.camera-section h3 {
   font-size: 0.9rem;
   margin-bottom: 0.75rem;
   color: var(--text-main);
 }
 
 .camera-section-desc {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
   margin-bottom: 1rem;
   line-height: 1.5;
@@ -579,7 +655,7 @@ input:checked + .slider-switch:before {
   background-color: #0f172a;
   padding: 0.1rem 0.3rem;
   border-radius: 3px;
-  font-size: 0.7rem;
+  font-size: 0.8rem;
   color: var(--accent);
 }
 
@@ -618,7 +694,7 @@ input:checked + .slider-switch:before {
 }
 
 .camera-option-detail {
-  font-size: 0.7rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
 }
 
@@ -670,7 +746,7 @@ input:checked + .slider-switch:before {
 }
 
 .ip-camera-form label {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
 }
 
@@ -684,8 +760,12 @@ input:checked + .slider-switch:before {
 }
 
 .ip-camera-form input:focus {
-  outline: none;
   border-color: var(--accent);
+}
+
+.ip-camera-form input::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
 }
 
 .ip-camera-form input:disabled {
@@ -694,7 +774,7 @@ input:checked + .slider-switch:before {
 }
 
 .control-btn.primary {
-  background-color: var(--accent);
+  background-color: var(--accent-bg);
   color: #000;
 }
 
@@ -739,6 +819,13 @@ input:checked + .slider-switch:before {
 
 .info-profile {
   margin-right: auto; /* El modo a la izquierda; la confianza sigue a la derecha */
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+/* Cámara en uso: se indica con texto, no solo con el color del borde */
+.camera-option-current {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-main);
 }

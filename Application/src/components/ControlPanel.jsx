@@ -26,8 +26,8 @@ export default function ControlPanel({
   const profileError = profiles.selectError || profiles.error;
 
   return (
-    <div className="card config-card">
-      <h3>Consola de Control</h3>
+    <section className="card config-card" aria-labelledby="console-title">
+      <h2 id="console-title">Consola de Control</h2>
       <div className="divider" />
 
       <div className="control-group">
@@ -52,19 +52,20 @@ export default function ControlPanel({
         </p>
         {profileError && (
           <div className="camera-error" role="alert">
-            ⚠ {profileError}
+            <span aria-hidden="true">⚠ </span>{profileError}
           </div>
         )}
       </div>
 
       <div className="control-group">
         <div className="slider-header">
-          <label className="control-label" htmlFor="confidence-slider">Umbral de Confianza (Conf):</label>
+          <label className="control-label" htmlFor="confidence-slider">Umbral de Confianza:</label>
           <span className="slider-value">{conf.toFixed(3)}</span>
         </div>
         <input
           id="confidence-slider"
           aria-describedby="confidence-help"
+          aria-valuetext={`${Math.round(conf * 100)} por ciento`}
           type="range"
           min="0.10"
           max="0.95"
@@ -73,40 +74,48 @@ export default function ControlPanel({
           onChange={onConfidenceChange}
           className="modern-slider"
         />
-        <p className="slider-desc" id="confidence-help">Ajusta la exigencia probabilística de las predicciones.</p>
-      </div>
-
-      <div className="control-row">
-        <label className="control-label" htmlFor="alarm-toggle">Alarma Sonora Reactiva:</label>
-        <label className="switch">
-          <input
-            id="alarm-toggle"
-            type="checkbox"
-            checked={soundEnabled}
-            onChange={onToggleSound}
-          />
-          <span className="slider-switch"></span>
-        </label>
+        <p className="slider-desc" id="confidence-help">
+          Más alto: menos detecciones, pero más seguras. Más bajo: más detecciones, con más errores.
+        </p>
       </div>
 
       <div className="control-group">
         <div className="control-row">
-          <span className="control-label">Fuente de Vídeo:</span>
+          <label className="control-label" htmlFor="alarm-toggle">Alarma Sonora Reactiva:</label>
+          <label className="switch">
+            <input
+              id="alarm-toggle"
+              type="checkbox"
+              aria-describedby="alarm-help"
+              checked={soundEnabled}
+              onChange={onToggleSound}
+            />
+            <span className="slider-switch"></span>
+          </label>
+        </div>
+        <p className="slider-desc" id="alarm-help">Suena un tono mientras falta un elemento de protección.</p>
+      </div>
+
+      <div className="control-group">
+        <div className="control-row">
+          <span className="control-label" id="camera-label">Fuente de Vídeo:</span>
           <button
             className="camera-select-btn"
+            aria-describedby="camera-label"
+            aria-haspopup="dialog"
             onClick={onOpenCameraModal}
           >
-            <span className="camera-icon">📷</span>
+            <span className="camera-icon" aria-hidden="true">📷</span>
             <span>{getCameraDisplayName(camera)}</span>
-            <span className="camera-chevron">▼</span>
+            <span className="camera-chevron" aria-hidden="true">▼</span>
           </button>
         </div>
         {cameraError && (
-          <div className="camera-error">
-            ⚠ {cameraError}
+          <div className="camera-error" role="status">
+            <span aria-hidden="true">⚠ </span>{cameraError}
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }

@@ -22,15 +22,20 @@ export default function VideoCard({ isActive, onToggleActive, hasInfraction, dev
   }, [streamError, isActive]);
 
   return (
-    <div className={`card video-card ${hasInfraction ? 'border-alarm' : ''}`}>
+    <section className={`card video-card ${hasInfraction ? 'border-alarm' : ''}`} aria-labelledby="video-title">
       <div className="card-header">
         <div className="header-left">
-          <span className={`pulse-dot ${isActive && !streamError ? 'online' : 'offline'}`}></span>
-          <h3>Vídeo Monitorizado en Vivo</h3>
+          <span className={`pulse-dot ${isActive && !streamError ? 'online' : 'offline'}`} aria-hidden="true"></span>
+          <h2 id="video-title">Vídeo Monitorizado en Vivo</h2>
+          <span className="sr-only">{isActive && !streamError ? '(en directo)' : '(sin vídeo)'}</span>
         </div>
         <div className="header-right">
-          <span className="hardware-pill">{device}</span>
-          <span className="format-pill">{weightsFormat}</span>
+          <span className="hardware-pill" title="Dispositivo que ejecuta el modelo">
+            <span className="sr-only">Dispositivo: </span>{device}
+          </span>
+          <span className="format-pill" title="Formato del modelo">
+            <span className="sr-only">Formato del modelo: </span>{weightsFormat}
+          </span>
         </div>
       </div>
 
@@ -39,14 +44,14 @@ export default function VideoCard({ isActive, onToggleActive, hasInfraction, dev
           <img
             key={streamKey}
             src={`${API_BASE}/api/stream?c=${streamKey}`}
-            alt="Señal de vídeo"
+            alt="Vídeo en directo de la cámara, con un recuadro en cada detección"
             className="stream-img"
             onError={() => setStreamError(true)}
           />
         ) : (
           <div className="viewport-placeholder">
-            <span className="placeholder-icon">📷</span>
-            <p>{streamError ? "Error al conectar con la señal del servidor. Reintentando automáticamente…" : "La monitorización está en pausa."}</p>
+            <span className="placeholder-icon" aria-hidden="true">📷</span>
+            <p role="status">{streamError ? "Error al conectar con la señal del servidor. Reintentando automáticamente…" : "La monitorización está en pausa."}</p>
             {streamError && (
               <button className="retry-btn" onClick={() => setStreamError(false)}>
                 Reintentar conexión
@@ -67,6 +72,6 @@ export default function VideoCard({ isActive, onToggleActive, hasInfraction, dev
           {isActive ? 'Suspender Monitoreo' : 'Iniciar Monitoreo'}
         </button>
       </div>
-    </div>
+    </section>
   );
 }
