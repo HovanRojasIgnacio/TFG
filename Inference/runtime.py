@@ -156,18 +156,23 @@ def _load(path: str):
     return model
 
 
-def load_model(base_dir: str):
-    """Devuelve (modelo, Runtime) con el mejor formato disponible para la GPU."""
+def load_model(base_dir: str, build: bool = True):
+    """Devuelve (modelo, Runtime) con el mejor formato disponible para la GPU.
+
+    build=False no genera nunca el motor en este proceso (congelaría el vídeo de un servidor en marcha): si
+    falta, es antiguo o no se puede cargar, se usa best.pt.
+    """
     require_cuda()
     engine, pt, onnx = (os.path.join(base_dir, f"best.{ext}") for ext in ("engine", "pt", "onnx"))
 
     use_engine = True
     if not os.path.exists(engine):
-        build_engine(base_dir)
+        if build:
+            build_engine(base_dir)
     elif engine_is_stale(base_dir):
-        logger.warning("best.engine no se generó a partir del best.pt actual: se regenera el motor")
-        if not build_engine(base_dir):
-            logger.warning("No se pudo regenerar el motor; se usa best.pt para no ejecutar el modelo anterior")
+        logger.warning("best.engine no se generó a partir del best.pt actual")
+        if not (build and build_engine(base_dir)):
+            logger.warning("No se regeneró el motor; se usa best.pt para no ejecutar el modelo anterior")
             use_engine = False
 
     if use_engine and os.path.exists(engine):
@@ -175,7 +180,7 @@ def load_model(base_dir: str):
             return _load(engine), Runtime(engine, "cuda", False)
         except Exception as e:
             logger.warning("El motor TensorRT no se pudo cargar (¿otra GPU o versión de TensorRT?): %s", e)
-            if build_engine(base_dir):
+            if build and build_engine(base_dir):
                 try:
                     return _load(engine), Runtime(engine, "cuda", False)
                 except Exception as e2:
