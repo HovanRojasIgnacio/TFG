@@ -410,6 +410,7 @@ class VideoPipeline:
     def __init__(self, detector: Detector):
         self.detector = detector
         self.conf_threshold: float = detector.profile.conf or 0.325
+        self.conf_set_by_user = False  # El operador movió el umbral: cambiar de modo ya no lo sustituye
         self.fps: float = 0.0
         self.items: Dict[str, Dict[str, int]] = counting.empty_items(detector.profile)
         self.neutral: int = 0
@@ -575,7 +576,7 @@ class VideoPipeline:
                 self.profile_loading = None
             return
         old, self.detector = self.detector, new
-        if new.profile.conf is not None:
+        if new.profile.conf is not None and not self.conf_set_by_user:
             self.conf_threshold = new.profile.conf  # Umbral recomendado para este modelo
         self._clear_detections()
         logger.info("Modo de detección cambiado: %s -> %s", old.profile.name, new.profile.name)
@@ -817,6 +818,7 @@ class CameraSelect(BaseModel):
 def update_settings(payload: SettingsUpdate):
     if 0.1 <= payload.conf <= 0.95:
         pipeline.conf_threshold = payload.conf
+        pipeline.conf_set_by_user = True
         return {"status": "success", "conf_threshold": pipeline.conf_threshold}
     raise HTTPException(status_code=400, detail="El umbral debe estar entre 0.10 y 0.95")
 
