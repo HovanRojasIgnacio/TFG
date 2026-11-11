@@ -6,7 +6,9 @@ niveles: el de casco desplegado ve la persona (person_with_helmet, person_no_hel
 tres "cascos correctos". Por eso, cuando el perfil asigna niveles, se cuenta cada cabeza y, además, cada persona
 en cuyo recuadro no hay ninguna cabeza detectada (un operario lejano o de espaldas del que solo se ve el cuerpo);
 las clases sin nivel (el casco suelto) no cuentan, porque ya las representa la cabeza. Si el perfil no asigna
-niveles a ninguna clase (por ejemplo, un modelo Helmet / NoHelmet / Vest / NoVest) se cuenta cada recuadro.
+niveles a ninguna clase (por ejemplo, un modelo Helmet / NoHelmet / Vest / NoVest) se cuenta cada recuadro,
+salvo cuando el modelo se contradice: si marca el mismo sitio como "lleva" y como "falta" el mismo elemento (la
+supresión de no máximos es por clase y no lo evita), solo cuenta el recuadro con más confianza.
 """
 from typing import Dict, List, NamedTuple, Optional, Sequence
 
@@ -38,7 +40,7 @@ DUPLICATE_IOU = 0.5  # Dos recuadros de persona que se solapan más que esto son
 
 
 def counted_flags(profile: Profile, class_names: Sequence[str],
-                  boxes: Optional[Sequence[Box]] = None) -> List[bool]:
+                  boxes: Optional[Sequence[Box]] = None, confs: Optional[Sequence[float]] = None) -> List[bool]:
     """Indica, para cada recuadro del frame, si cuenta en los contadores (un recuadro por operario).
 
     Con las coordenadas (`boxes`), cada operario se identifica por su posición: cuentan todas las cabezas y
@@ -81,7 +83,18 @@ def counted_flags(profile: Profile, class_names: Sequence[str],
                 claimed.append(boxes[i])
         else:
             flags.append(False)                                # casco suelto: ya cuenta su cabeza
+    if not hierarchy and boxes is not None and confs is not None:
+        _drop_contradictions(rules, boxes, confs, flags)
     return flags
+
+
+def _drop_contradictions(rules, boxes: Sequence[Box], confs: Sequence[float], flags: List[bool]) -> None:
+    """De dos recuadros solapados que dicen lo contrario del mismo elemento, deja de contar el menos fiable."""
+    for i in range(len(rules)):
+        for j in range(i + 1, len(rules)):
+            if flags[i] and flags[j] and rules[i].item is not None and rules[i].item == rules[j].item \
+                    and rules[i].state != rules[j].state and _iou(boxes[i], boxes[j]) > DUPLICATE_IOU:
+                flags[j if confs[i] >= confs[j] else i] = False
 
 
 class Counts(NamedTuple):
@@ -112,7 +125,7 @@ def count(profile: Profile, class_names: Sequence[str], confs: Sequence[float],
     items = empty_items(profile)
     neutral = 0
     highest = 0.0
-    flags = counted_flags(profile, class_names, boxes)
+    flags = counted_flags(profile, class_names, boxes, confs)
     for name, conf, counted in zip(class_names, confs, flags):
         if not counted:
             continue
