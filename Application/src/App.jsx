@@ -51,9 +51,11 @@ function App() {
 
       {/* Aviso para lectores de pantalla cuando aparece o desaparece una infracción (WCAG 4.1.3) */}
       <p className="sr-only" role="status">
-        {isActive && hasAlarm(telemetry)
-          ? "Atención: falta un elemento de protección en la imagen."
-          : "Sin infracciones en la imagen."}
+        {!isActive
+          ? "Monitorización en pausa."
+          : hasAlarm(telemetry)
+            ? "Atención: falta un elemento de protección en la imagen."
+            : "Sin infracciones en la imagen."}
       </p>
 
       {isActive && backendOnline === false && (
@@ -66,7 +68,7 @@ function App() {
         <VideoCard
           isActive={isActive}
           onToggleActive={() => setIsActive(!isActive)}
-          hasInfraction={hasAlarm(telemetry)}
+          hasInfraction={isActive && hasAlarm(telemetry)}
           device={telemetry.device}
           weightsFormat={telemetry.weights_format}
           backendOnline={backendOnline}

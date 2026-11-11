@@ -7,4 +7,6 @@ export const CONF_DEBOUNCE_MS = 250;       // Espera tras mover el deslizador an
 export const STREAM_RETRY_MS = 3000;       // Espera antes de reintentar el stream tras un error
 export const REQUEST_TIMEOUT_MS = 3000;    // Tiempo máximo de una petición a la API (sin él, una conexión
                                            // caída sin aviso dejaría la petición pendiente durante minutos)
+// El backend prueba la cámara hasta 11 s (conexión y primer fotograma) antes de responder
+export const CAMERA_SELECT_TIMEOUT_MS = 15000;
 export const DEFAULT_CONF = 0.325;

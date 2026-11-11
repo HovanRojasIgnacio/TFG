@@ -829,3 +829,9 @@ input:checked + .slider-switch:before {
   font-weight: 700;
   color: var(--text-main);
 }
+
+/* Aviso de que las métricas están congeladas mientras la monitorización está en pausa */
+.paused-note {
+  margin: 0 0 0.75rem;
+  color: var(--warning);
+}

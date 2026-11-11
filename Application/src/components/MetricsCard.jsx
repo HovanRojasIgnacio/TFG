@@ -14,6 +14,10 @@ export default function MetricsCard({ isActive, fps, safetyScore, items, itemNam
       <h2 id="metrics-title">Métricas de Inferencia</h2>
       <div className="divider" />
 
+      {!isActive && (
+        <p className="slider-desc paused-note">En pausa: estos datos son los de antes de suspender y no se actualizan.</p>
+      )}
+
       <div className="metrics-grid">
         <div className="metric-box">
           <span className="metric-title">
