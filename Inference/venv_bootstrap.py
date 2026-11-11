@@ -22,6 +22,12 @@ def ensure_venv() -> None:
     if os.path.normcase(os.path.abspath(sys.prefix)) == os.path.normcase(venv_dir):
         return  # ya estamos dentro del entorno virtual
 
-    print(f"[GuardWatch] Usando el entorno virtual: {venv_python}", flush=True)
     env = dict(os.environ, GUARDWATCH_NO_VENV="1")
+    # Un entorno copiado de otro equipo apunta a un Python que aquí no existe y no llega a arrancar
+    if subprocess.call([venv_python, "-c", ""], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
+        raise SystemExit(
+            f"[GuardWatch] El entorno virtual {venv_dir} no funciona en este equipo (¿se creó en otro o se "
+            "desinstaló el Python con el que se hizo?). Bórralo y créalo de nuevo como indica el README, o usa el "
+            "Python actual con GUARDWATCH_NO_VENV=1.")
+    print(f"[GuardWatch] Usando el entorno virtual: {venv_python}", flush=True)
     raise SystemExit(subprocess.call([venv_python] + sys.argv, env=env))

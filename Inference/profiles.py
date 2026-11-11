@@ -27,6 +27,7 @@ from typing import Dict, Mapping, NamedTuple, Optional
 PROFILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles")
 STATES = ("ok", "missing", "neutral", "ignore")
 LEVELS = {"head": 0, "person": 1}
+CONF_MIN, CONF_MAX = 0.1, 0.95  # Intervalo del umbral de confianza (el del deslizador del panel)
 
 
 class ClassRule(NamedTuple):
@@ -78,8 +79,13 @@ def parse(profile_id: str, data: Mapping, base_dir: str = "") -> Profile:
     if not classes:
         raise ValueError(f"Perfil {profile_id}: 'classes' está vacío")
     conf = data.get("conf")
+    if conf is not None:
+        # Fuera del intervalo del deslizador del panel el modo dejaría de detectar (o lo detectaría todo) sin aviso
+        if isinstance(conf, bool) or not isinstance(conf, (int, float)) or not CONF_MIN <= conf <= CONF_MAX:
+            raise ValueError(f"Perfil {profile_id}: conf debe ser un número entre {CONF_MIN} y {CONF_MAX}")
+        conf = float(conf)
     return Profile(profile_id, data.get("name") or profile_id, items, classes, data.get("source", ""),
-                   float(conf) if conf is not None else None, base_dir)
+                   conf, base_dir)
 
 
 def load(profile_id: str, profiles_dir: str = PROFILES_DIR) -> Profile:
