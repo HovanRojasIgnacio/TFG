@@ -25,6 +25,8 @@ export default function CameraModal({
         </div>
       )}
 
+      {testing && <p className="slider-desc" role="status">Probando la cámara…</p>}
+
       <div className="camera-tab">
         <button
           className="tab-btn"
@@ -47,6 +49,7 @@ export default function CameraModal({
                 key={cam.index}
                 className={`camera-option ${isCurrent(cam) ? 'active' : ''}`}
                 aria-pressed={isCurrent(cam)}
+                disabled={testing}
                 onClick={() => onSelectLocal(cam.index)}
               >
                 <span className="camera-option-name">{cam.name}</span>

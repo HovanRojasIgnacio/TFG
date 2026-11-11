@@ -8,7 +8,10 @@ export default function InfractionGallery({ infractions, onView }) {
     <section className="card infractions-section" aria-labelledby="gallery-title">
       <div className="section-header">
         <h2 id="gallery-title">Registro de Infracciones Guardadas</h2>
-        <span className="log-count">{list.length} Guardadas</span>
+        {/* El backend envía como mucho las 12 últimas de las 100 que conserva */}
+        {list.length > 0 && (
+          <span className="log-count">{list.length === 1 ? "La más reciente" : `Las ${list.length} más recientes`}</span>
+        )}
       </div>
       <div className="divider" />
 
