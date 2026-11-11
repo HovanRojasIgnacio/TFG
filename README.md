@@ -120,7 +120,7 @@ python -m unittest discover -s Inference/tests
 cd Application && npm run lint && npm run build
 ```
 
-Las pruebas del backend cubren el recuento y los perfiles; solo usan la biblioteca estándar, así que no necesitan GPU ni el entorno virtual. El resto del backend no tiene pruebas automáticas. GitHub Actions ejecuta ambas comprobaciones en cada push (`.github/workflows/ci.yml`).
+Las pruebas del recuento y de los perfiles solo usan la biblioteca estándar. Las de la API y del pipeline de vídeo (`tests/test_api.py`) usan un modelo simulado, sin GPU ni cámara, pero necesitan los paquetes de `requirements.txt` y `httpx`: ejecútalas con el Python de `Inference/.venv`; sin esos paquetes se omiten. GitHub Actions ejecuta en cada push el lint y la compilación del panel y las pruebas que solo usan la biblioteca estándar (`.github/workflows/ci.yml`).
 
 ## Modos de detección
 
@@ -163,5 +163,5 @@ Las cámaras IP solo admiten URLs `http://`, `https://` o `rtsp://`. Si la URL l
 ## Cumplimiento EPI y evidencias
 
 - **Cumplimiento EPI (%)** = elementos llevados / (elementos llevados + elementos que faltan) × 100, sumando todos los elementos del modo (casco, chaleco) en el fotograma actual. En el modo casco cada operario cuenta una vez; en el modo casco y chaleco cuenta cada recuadro, así que un operario con casco y sin chaleco suma un elemento llevado y uno que falta (50 %). Las detecciones neutrales no cuentan. Si no se detecta ningún elemento, vale 100 %.
-- **Infracciones:** cuando falta al menos un elemento se guarda una captura anotada como máximo cada 4 segundos en `Inference/static/infractions/`. El panel muestra las 12 últimas; el registro en memoria conserva 100 y se pierde al reiniciar el backend. Cuando una infracción sale de ese registro, su captura se borra del disco. Además, al arrancar y cada hora se borran las capturas con más de 30 días, incluidas las de ejecuciones anteriores (la Ley Orgánica 3/2018 fija un mes como máximo); el plazo se cambia con la variable de entorno `GUARDWATCH_SNAPSHOT_DAYS`.
+- **Infracciones:** cuando falta un elemento en 5 de los últimos 8 fotogramas (un falso positivo de un solo fotograma no cuenta) se guarda una captura anotada, como máximo cada 4 segundos, en `Inference/static/infractions/`, y suena la alarma si está activada. El panel muestra las 12 últimas; el registro conserva 100 y se guarda en `Inference/infractions.json`, así que sigue disponible al reiniciar el backend. Cuando una infracción sale de ese registro, su captura se borra del disco. Además, al arrancar y cada hora se borran las capturas con más de 30 días, incluidas las de ejecuciones anteriores (la Ley Orgánica 3/2018 fija un mes como máximo); el plazo se cambia con la variable de entorno `GUARDWATCH_SNAPSHOT_DAYS`.
 - **Espacio en disco:** como mucho se acumulan las capturas de los últimos 30 días (o del plazo de `GUARDWATCH_SNAPSHOT_DAYS`); las más antiguas se borran solas. Puedes vaciar `Inference/static/infractions/` antes si no necesitas las evidencias; si borras la carpeta, el servidor la vuelve a crear.

@@ -12,6 +12,10 @@ import InfractionGallery from './components/InfractionGallery';
 import EvidenceModal from './components/EvidenceModal';
 import CameraModal from './components/CameraModal';
 
+// La alarma (sonido, borde rojo y aviso) responde a la infracción confirmada en varios fotogramas, no a un
+// fotograma suelto. Un backend anterior no envía ese campo: entonces vale cualquier infracción.
+const hasAlarm = (data) => data.violation_confirmed ?? data.violations > 0;
+
 function App() {
   const [isActive, setIsActive] = useState(true);
   const [activeModalImg, setActiveModalImg] = useState(null);
@@ -20,7 +24,7 @@ function App() {
   const { soundEnabled, toggleSound, beep } = useAlarm();
 
   const [telemetry, setTelemetry, backendOnline] = useTelemetry(isActive, (data) => {
-    if (soundEnabled && data.violations > 0) {
+    if (soundEnabled && hasAlarm(data)) {
       beep();
     }
   });
@@ -47,7 +51,7 @@ function App() {
 
       {/* Aviso para lectores de pantalla cuando aparece o desaparece una infracción (WCAG 4.1.3) */}
       <p className="sr-only" role="status">
-        {isActive && telemetry.violations > 0
+        {isActive && hasAlarm(telemetry)
           ? "Atención: falta un elemento de protección en la imagen."
           : "Sin infracciones en la imagen."}
       </p>
@@ -62,7 +66,7 @@ function App() {
         <VideoCard
           isActive={isActive}
           onToggleActive={() => setIsActive(!isActive)}
-          hasInfraction={telemetry.violations > 0}
+          hasInfraction={hasAlarm(telemetry)}
           device={telemetry.device}
           weightsFormat={telemetry.weights_format}
           backendOnline={backendOnline}
