@@ -835,3 +835,16 @@ input:checked + .slider-switch:before {
   margin: 0 0 0.75rem;
   color: var(--warning);
 }
+
+/* La etiqueta de la fuente de vídeo va encima del botón: al lado se partía en dos líneas */
+.control-row:has(.camera-select-btn) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+
+/* Separación entre el título, el mensaje de error y el primer botón del diálogo de cámaras */
+.camera-modal h2,
+.camera-modal .camera-error {
+  margin: 0 0 0.75rem;
+}
