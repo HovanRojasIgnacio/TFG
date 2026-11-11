@@ -96,6 +96,21 @@ class VestProfileTest(unittest.TestCase):
         self.assertEqual(result.safety_score, 60)
         self.assertEqual(result.highest_violation, 0.8)
 
+    def test_contradictory_boxes_count_once(self):
+        # El modelo marca la misma cabeza como Helmet y como NoHelmet: cuenta el recuadro con más confianza
+        boxes = [[100, 100, 200, 200], [104, 98, 202, 205], [90, 210, 220, 400]]
+        result = counting.count(self.profile, ["Helmet", "NoHelmet", "Vest"], [0.8, 0.5, 0.9], boxes)
+        self.assertEqual(result.items, {"helmet": {"ok": 1, "missing": 0}, "vest": {"ok": 1, "missing": 0}})
+        self.assertEqual(result.flags, [True, False, True])
+        result = counting.count(self.profile, ["Helmet", "NoHelmet", "Vest"], [0.4, 0.7, 0.9], boxes)
+        self.assertEqual(result.items, {"helmet": {"ok": 0, "missing": 1}, "vest": {"ok": 1, "missing": 0}})
+        self.assertEqual(result.highest_violation, 0.7)
+
+    def test_two_workers_side_by_side_both_count(self):
+        boxes = [[100, 100, 200, 200], [190, 100, 290, 200]]  # Se tocan, pero no son la misma cabeza
+        result = counting.count(self.profile, ["Helmet", "NoHelmet"], [0.8, 0.5], boxes)
+        self.assertEqual(result.items["helmet"], {"ok": 1, "missing": 1})
+
     def test_empty_frame(self):
         result = counting.count(self.profile, [], [], [])
         self.assertEqual(result.items, {"helmet": {"ok": 0, "missing": 0}, "vest": {"ok": 0, "missing": 0}})
