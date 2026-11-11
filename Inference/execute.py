@@ -182,6 +182,7 @@ PURGE_INTERVAL = 3600.0  # Cada cuánto se revisan las capturas antiguas mientra
 # falso positivo de un solo frame no guarda una captura ni hace sonar la alarma, y un parpadeo no la anula
 VIOLATION_WINDOW = 8
 VIOLATION_MIN_FRAMES = 5
+FPS_SMOOTHING = 0.1  # Peso del último frame en la media móvil de los FPS
 LOG_SIZE = 100  # Infracciones que conserva el registro
 # El registro se guarda fuera de /static: contiene los nombres de las capturas, que no deben poder adivinarse
 LOG_FILE = os.path.join(current_dir, "infractions.json")
@@ -315,7 +316,7 @@ def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
                 if cap:
                     try:
                         cap.release()
-                    except:
+                    except Exception:
                         pass
             
             if consecutive_failures >= 2:
@@ -845,11 +846,13 @@ class VideoPipeline:
                 if time.time() - self._last_error_log > 10:
                     logger.exception("Error al procesar un frame; se continúa con el siguiente")
                     self._last_error_log = time.time()
-                self._on_processing_error(frame)
+                self._on_processing_error(cv2.flip(frame, 1) if current_source.type == "local" else frame)
                 time.sleep(0.1)
             else:
                 if time_diff > 0:
-                    self.fps = 1.0 / time_diff
+                    # Media móvil: con 1 / Δt de un solo frame la cifra del panel saltaba de un valor a otro
+                    instant = 1.0 / time_diff
+                    self.fps = instant if self.fps == 0 else FPS_SMOOTHING * instant + (1 - FPS_SMOOTHING) * self.fps
                 if self._failing_since is not None:  # El procesamiento se ha recuperado
                     self._failing_since = None
                     if self.camera_error == PROCESSING_ERROR:
@@ -871,13 +874,6 @@ class SettingsUpdate(BaseModel):
 
 class ProfileSelect(BaseModel):
     id: str
-
-
-class CameraSelect(BaseModel):
-    type: str  # "local" or "ip"
-    index: Optional[int] = None
-    url: Optional[str] = None
-    name: Optional[str] = None
 
 
 @app.post("/api/settings")
@@ -902,7 +898,7 @@ def refresh_cameras():
 
 
 @app.post("/api/cameras/select")
-def select_camera(payload: CameraSelect):
+def select_camera(payload: CameraSource):
     """Switch to a different camera source."""
     if payload.type == "ip":
         # Solo protocolos de red: evita que OpenCV abra rutas de archivo locales u otros esquemas
@@ -914,8 +910,7 @@ def select_camera(payload: CameraSelect):
     else:
         raise HTTPException(status_code=400, detail="Tipo de cámara no válido (use 'local' o 'ip')")
 
-    source = CameraSource(**payload.model_dump())
-    if pipeline.set_camera(source):
+    if pipeline.set_camera(payload):
         return {"status": "success", "camera": pipeline.get_camera_info(probe=False)["current"]}
     raise HTTPException(status_code=400, detail="No se pudo conectar a la cámara seleccionada")
 

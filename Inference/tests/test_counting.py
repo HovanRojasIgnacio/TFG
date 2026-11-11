@@ -125,6 +125,13 @@ class ProfileValidationTest(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 profiles.parse("x", data)
 
+    def test_threshold_must_be_within_the_slider_range(self):
+        self.assertEqual(profiles.parse("x", {**VEST_PROFILE, "conf": 0.35}).conf, 0.35)
+        self.assertIsNone(profiles.parse("x", VEST_PROFILE).conf)
+        for conf in (5, -1, 0, "0.5", True):
+            with self.subTest(conf=conf), self.assertRaises(ValueError):
+                profiles.parse("x", {**VEST_PROFILE, "conf": conf})
+
     def test_only_installed_folders_are_profiles(self):
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, "uno"))
