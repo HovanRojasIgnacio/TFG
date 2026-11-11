@@ -13,6 +13,7 @@ os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import asyncio
 import gc
+import json
 import logging
 import re
 import secrets
@@ -22,7 +23,8 @@ import cv2
 import time
 import threading
 from collections import deque
-from typing import Dict, List, Optional, Union
+from contextlib import asynccontextmanager
+from typing import Dict, List, Optional
 from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Request
@@ -37,7 +39,24 @@ from runtime import Runtime, engine_needed, load_model, precision_kwargs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("guardwatch")
 
-app = FastAPI(title="GuardWatch AI Engine")
+pipeline = None  # VideoPipeline; se crea al arrancar el servidor (lifespan), no al importar el módulo
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Carga el modelo y arranca el hilo de vídeo al iniciar el servidor, y lo para al cerrarlo.
+
+    Importar este módulo no carga el modelo ni abre la cámara, así que las pruebas pueden instalar antes su
+    propio pipeline (con un modelo simulado y sin hilo de vídeo).
+    """
+    global pipeline
+    if pipeline is None:
+        pipeline = VideoPipeline(load_detector(STARTUP_PROFILE))
+    yield
+    pipeline.stop()
+
+
+app = FastAPI(title="GuardWatch AI Engine", lifespan=lifespan)
 
 # Solo el panel puede llamar a la API desde un navegador. Con "*", cualquier página web abierta por el
 # operador podía cambiar la cámara o el umbral y leer las respuestas. GUARDWATCH_ORIGINS añade otros
@@ -159,6 +178,13 @@ SNAPSHOT_RETENTION_DAYS = float(os.environ.get("GUARDWATCH_SNAPSHOT_DAYS", "30")
 PROCESSING_ERROR = "Error al procesar el vídeo (detalles en el registro del servidor)"
 PROCESSING_ERROR_AFTER = 2.0  # Segundos fallando seguidos tras los que el error se muestra en el panel
 PURGE_INTERVAL = 3600.0  # Cada cuánto se revisan las capturas antiguas mientras el servidor está en marcha (s)
+# Una infracción se confirma cuando aparece en VIOLATION_MIN_FRAMES de los últimos VIOLATION_WINDOW frames: un
+# falso positivo de un solo frame no guarda una captura ni hace sonar la alarma, y un parpadeo no la anula
+VIOLATION_WINDOW = 8
+VIOLATION_MIN_FRAMES = 5
+LOG_SIZE = 100  # Infracciones que conserva el registro
+# El registro se guarda fuera de /static: contiene los nombres de las capturas, que no deben poder adivinarse
+LOG_FILE = os.path.join(current_dir, "infractions.json")
 
 
 def purge_old_snapshots() -> set:
@@ -180,6 +206,31 @@ def purge_old_snapshots() -> set:
     if removed:
         logger.info("Borradas %d capturas con más de %g días", len(removed), SNAPSHOT_RETENTION_DAYS)
     return removed
+
+
+def load_log() -> List[Dict]:
+    """Lee el registro de infracciones guardado y descarta las entradas cuya captura ya no existe."""
+    try:
+        with open(LOG_FILE, encoding="utf-8") as f:
+            entries = json.load(f)
+        return [e for e in entries if isinstance(e, dict) and os.path.isfile(
+            os.path.join(infractions_dir, os.path.basename(str(e.get("image_path", "")))))][-LOG_SIZE:]
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError, AttributeError) as e:
+        logger.warning("No se pudo leer el registro de infracciones %s: %s", LOG_FILE, e)
+        return []
+
+
+def save_log(entries) -> None:
+    """Guarda el registro de infracciones (se escribe aparte y se sustituye, para no dejarlo a medias)."""
+    try:
+        tmp = LOG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(list(entries), f, ensure_ascii=False)
+        os.replace(tmp, LOG_FILE)
+    except OSError as e:  # Se ejecuta en el hilo de vídeo: un fallo de disco no debe terminarlo
+        logger.error("No se pudo guardar el registro de infracciones: %s", e)
 
 
 # Una clave que contiene alguna de estas partes se considera secreta (password, loginPas, access_token, api_key...)
@@ -407,7 +458,8 @@ class ProfileBusy(Exception):
 
 
 class VideoPipeline:
-    def __init__(self, detector: Detector):
+    def __init__(self, detector: Detector, start: bool = True):
+        """start=False no arranca el hilo de vídeo (pruebas que llaman a _process_frame directamente)."""
         self.detector = detector
         self.conf_threshold: float = detector.profile.conf or 0.325
         self.conf_set_by_user = False  # El operador movió el umbral: cambiar de modo ya no lo sustituye
@@ -416,10 +468,12 @@ class VideoPipeline:
         self.neutral: int = 0
         self.violations: int = 0
         self.safety_score: int = 100
+        self.violation_confirmed: bool = False  # Infracción presente en varios frames seguidos (alarma)
+        self._recent_violations = deque(maxlen=VIOLATION_WINDOW)  # ¿Hubo infracción en cada frame reciente?
         self._profile_lock = threading.Lock()
         self.profile_loading: Optional[str] = None  # Modo que se está cargando en segundo plano
         self.profile_error: Optional[str] = None    # Error de la última carga fallida
-        self.infractions_log = deque(maxlen=100)
+        self.infractions_log = deque(maxlen=LOG_SIZE)
         self.last_infraction_save: float = 0.0
         self.save_cooldown: float = 4.0
         
@@ -436,12 +490,20 @@ class VideoPipeline:
         self._handover = None  # (fuente, cámara ya abierta) que set_camera deja para el bucle
         self._retry_requested = False  # set_camera pide reconectar la cámara actual sin esperar
         purge_old_snapshots()
+        self.infractions_log.extend(load_log())  # Las infracciones de ejecuciones anteriores siguen en el panel
         self._last_purge = time.time()
         self._last_error_log = 0.0
         self._failing_since = None  # Inicio de una racha de fallos al procesar frames
-        
+
         self.thread = threading.Thread(target=self._process_stream, daemon=True)
-        self.thread.start()
+        if start:
+            self.thread.start()
+
+    def stop(self):
+        """Termina el hilo de vídeo y libera la cámara (al cerrar el servidor)."""
+        self.is_running = False
+        if self.thread.is_alive():
+            self.thread.join(timeout=CAMERA_TEST_TIMEOUT)
 
     @staticmethod
     def _same_source(a: Optional[CameraSource], b: Optional[CameraSource]) -> bool:
@@ -513,6 +575,7 @@ class VideoPipeline:
             self.infractions_log = deque(
                 (item for item in self.infractions_log if os.path.basename(item["image_path"]) not in removed),
                 maxlen=self.infractions_log.maxlen)
+            save_log(self.infractions_log)
 
     def _on_processing_error(self, frame):
         """Tras un fallo al procesar un frame, el panel no debe seguir mostrando el último resultado bueno.
@@ -543,6 +606,8 @@ class VideoPipeline:
         self.neutral = 0
         self.violations = 0
         self.safety_score = 100
+        self.violation_confirmed = False
+        self._recent_violations.clear()
         self.fps = 0.0
 
     def select_profile(self, profile_id: str) -> bool:
@@ -634,9 +699,11 @@ class VideoPipeline:
         if current_mode:
             self.items, self.neutral = counts.items, counts.neutral
             self.violations, self.safety_score = counts.violations, counts.safety_score
+            self._recent_violations.append(counts.violations > 0)
+            self.violation_confirmed = sum(self._recent_violations) >= VIOLATION_MIN_FRAMES
 
-        # Registro de infracciones
-        if current_mode and counts.violations > 0 and \
+        # Registro de infracciones: solo las confirmadas, y con un frame en el que la infracción se ve
+        if current_mode and self.violation_confirmed and counts.violations > 0 and \
                 (current_time - self.last_infraction_save) > self.save_cooldown:
             # /static no tiene autenticación: el sufijo aleatorio impide adivinar la dirección de una captura
             filename = f"inf_{int(current_time)}_{secrets.token_hex(8)}.jpg"
@@ -656,12 +723,14 @@ class VideoPipeline:
 
                 self.infractions_log.append({
                     "id": int(current_time * 1000),
+                    "date": time.strftime("%Y-%m-%d", time.localtime(current_time)),
                     "timestamp": time.strftime("%H:%M:%S", time.localtime(current_time)),
                     "confidence": round(counts.highest_violation, 2),
                     "image_path": f"/static/infractions/{filename}",
                     "profile": detector.profile.name,
                     "details": missing_details(detector.profile, counts.items),
                 })
+                save_log(self.infractions_log)
 
         # El JPEG solo se codifica si alguien está viendo el stream (ahorra CPU)
         if time.time() - self.last_viewer_time < VIEWER_TIMEOUT:
@@ -796,9 +865,6 @@ def missing_details(profile: profiles.Profile, items: Dict[str, Dict[str, int]])
     return "Falta: " + ", ".join(parts)
 
 
-pipeline = VideoPipeline(load_detector(STARTUP_PROFILE))
-
-
 class SettingsUpdate(BaseModel):
     conf: float
 
@@ -915,6 +981,7 @@ def get_stats(request: Request):
         "items": pipeline.items,
         "neutral": pipeline.neutral,
         "violations": pipeline.violations,
+        "violation_confirmed": pipeline.violation_confirmed,
         "safety_score": pipeline.safety_score,
         "conf_threshold": pipeline.conf_threshold,
         "infractions": infractions,

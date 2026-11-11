@@ -40,8 +40,10 @@ Inference/profiles/*/best.onnx
 Documentation/_*
 Documentation/*.tmp
 
-# Capturas de infracciones: son imágenes de personas, no deben subirse
+# Capturas de infracciones y su registro: son imágenes de personas, no deben subirse
 Inference/static/
+Inference/infractions.json
+Inference/infractions.json.tmp
 
 # Entrenamientos y separaciones de datasets (rutas locales de cada equipo)
 Inference/runs/

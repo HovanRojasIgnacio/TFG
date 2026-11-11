@@ -1,5 +1,8 @@
 export default function InfractionGallery({ infractions, onView }) {
   const list = infractions || [];
+  // El registro se conserva entre reinicios: la fecha se muestra en las infracciones que no son de hoy
+  const today = new Date().toLocaleDateString('sv-SE');  // AAAA-MM-DD en hora local
+  const when = (inf) => (inf.date && inf.date !== today ? `${inf.date} ${inf.timestamp}` : inf.timestamp);
 
   return (
     <section className="card infractions-section" aria-labelledby="gallery-title">
@@ -11,15 +14,15 @@ export default function InfractionGallery({ infractions, onView }) {
 
       {list.length === 0 ? (
         <div className="no-infractions">
-          <p><span aria-hidden="true">✅ </span>Ninguna infracción registrada en la sesión actual.</p>
+          <p><span aria-hidden="true">✅ </span>Ninguna infracción registrada.</p>
         </div>
       ) : (
         <div className="infractions-grid">
           {list.slice().reverse().map((inf) => (
             <div className="infraction-item-card" key={inf.id}>
               <div className="item-thumbnail">
-                <img src={inf.image_url} alt={`Imagen de la infracción de las ${inf.timestamp}`} loading="lazy" />
-                <span className="item-badge-time">{inf.timestamp}</span>
+                <img src={inf.image_url} alt={`Imagen de la infracción de las ${when(inf)}`} loading="lazy" />
+                <span className="item-badge-time">{when(inf)}</span>
               </div>
               <div className="item-info">
                 <div className="info-top">
@@ -29,7 +32,7 @@ export default function InfractionGallery({ infractions, onView }) {
                 <p>{inf.details}</p>
                 <button
                   className="view-btn"
-                  aria-label={`Ver Evidencia de las ${inf.timestamp}`}
+                  aria-label={`Ver Evidencia de las ${when(inf)}`}
                   onClick={() => onView(inf.image_url)}
                 >
                   Ver Evidencia
