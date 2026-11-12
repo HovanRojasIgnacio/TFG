@@ -191,8 +191,8 @@ LOG_FILE = os.path.join(current_dir, "infractions.json")
 def purge_old_snapshots() -> set:
     """Borra las capturas con más de SNAPSHOT_RETENTION_DAYS días y devuelve sus nombres.
 
-    El registro de infracciones está en memoria y empieza vacío en cada arranque, así que sin esta limpieza
-    las capturas de ejecuciones anteriores se quedarían en el disco para siempre.
+    El registro solo conserva las últimas infracciones, así que sin esta limpieza las capturas que ya no están
+    en él se quedarían en el disco para siempre.
     """
     limit = time.time() - SNAPSHOT_RETENTION_DAYS * 86400
     removed = set()
