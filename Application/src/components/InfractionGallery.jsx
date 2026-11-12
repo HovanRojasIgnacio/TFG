@@ -1,8 +1,10 @@
+import { infractionTime, galleryCount, localDate } from '../lib/telemetry';
+
 export default function InfractionGallery({ infractions, onView }) {
   const list = infractions || [];
   // El registro se conserva entre reinicios: la fecha se muestra en las infracciones que no son de hoy
-  const today = new Date().toLocaleDateString('sv-SE');  // AAAA-MM-DD en hora local
-  const when = (inf) => (inf.date && inf.date !== today ? `${inf.date} ${inf.timestamp}` : inf.timestamp);
+  const today = localDate();
+  const when = (inf) => infractionTime(inf, today);
 
   return (
     <section className="card infractions-section" aria-labelledby="gallery-title">
@@ -10,7 +12,7 @@ export default function InfractionGallery({ infractions, onView }) {
         <h2 id="gallery-title">Registro de Infracciones Guardadas</h2>
         {/* El backend envía como mucho las 12 últimas de las 100 que conserva */}
         {list.length > 0 && (
-          <span className="log-count">{list.length === 1 ? "La más reciente" : `Las ${list.length} más recientes`}</span>
+          <span className="log-count">{galleryCount(list.length)}</span>
         )}
       </div>
       <div className="divider" />

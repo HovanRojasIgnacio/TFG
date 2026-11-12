@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import './App.css';
+import { hasAlarm } from './lib/telemetry';
 import { useTelemetry } from './hooks/useTelemetry';
 import { useAlarm } from './hooks/useAlarm';
 import { useCameras } from './hooks/useCameras';
@@ -11,10 +12,6 @@ import MetricsCard from './components/MetricsCard';
 import InfractionGallery from './components/InfractionGallery';
 import EvidenceModal from './components/EvidenceModal';
 import CameraModal from './components/CameraModal';
-
-// La alarma (sonido, borde rojo y aviso) responde a la infracción confirmada en varios fotogramas, no a un
-// fotograma suelto. Un backend anterior no envía ese campo: entonces vale cualquier infracción.
-const hasAlarm = (data) => data.violation_confirmed ?? data.violations > 0;
 
 function App() {
   const [isActive, setIsActive] = useState(true);

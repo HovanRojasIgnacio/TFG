@@ -20,6 +20,7 @@ jobs:
           cache-dependency-path: Application/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       - run: npm run build
 
   # Recuento y perfiles: solo usan la biblioteca estándar, así que no hace falta instalar PyTorch ni una GPU

@@ -10,6 +10,7 @@ Desde esta carpeta, después de `npm install`:
 |---|---|
 | `npm run dev` | Servidor de desarrollo en `http://localhost:5173/TFG/`. |
 | `npm run lint` | Comprueba el código con ESLint. |
+| `npm test` | Pruebas de las funciones puras de `src/lib/` con el ejecutor de Node, sin dependencias. |
 | `npm run build` | Genera la versión de producción en `dist/`. |
 | `npm run preview` | Sirve `dist/` en `http://localhost:4173/TFG/`. |
 | `npm run deploy` | Compila y publica `dist/` en GitHub Pages. |
@@ -25,4 +26,5 @@ Desde esta carpeta, después de `npm install`:
 - `src/App.jsx`: composición del panel.
 - `src/components/`: vídeo, consola de control, métricas, galería de infracciones y diálogos.
 - `src/hooks/`: telemetría (`/api/stats`), cámaras, modos de detección, umbral, alarma y foco de los diálogos.
+- `src/lib/telemetry.js`: funciones puras (alarma, colores, textos) y sus pruebas.
 - `src/config.js`: dirección del backend y constantes de tiempo.
