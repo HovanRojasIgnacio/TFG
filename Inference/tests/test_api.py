@@ -134,6 +134,14 @@ class InfractionLogTest(PipelineTestCase):
             f.write("{no es json")
         self.assertEqual(len(self.new_pipeline().infractions_log), 0)
 
+    def test_a_log_that_is_valid_json_but_not_a_list_is_ignored(self):
+        # JSON válido pero que no es una lista de infracciones: el servidor debe arrancar igualmente
+        for content in ("null", "5", "{}", '"x"', "[1, null, {}]", "[" * 5000):
+            with self.subTest(content=content[:20]):
+                with open(self.log_file, "w", encoding="utf-8") as f:
+                    f.write(content)
+                self.assertEqual(len(self.new_pipeline().infractions_log), 0)
+
 
 class ApiTest(PipelineTestCase):
     def setUp(self):
@@ -331,6 +339,27 @@ class CameraTest(PipelineTestCase):
         self.assertEqual(self.pipeline.items["helmet"]["ok"], 1)
         self.pipeline.stop()
         self.assertTrue(caps[1].released)
+
+
+    def test_a_camera_change_clears_the_previous_cameras_violations(self):
+        for _ in range(execute.VIOLATION_MIN_FRAMES):
+            self.process(NO_HELMET)
+        self.assertTrue(self.pipeline.violation_confirmed)
+        # Cambio de cámara con el bucle real: la ventana de infracciones de la anterior no debe sobrevivir
+        # La cámara nueva da un solo fotograma tras la prueba de conexión (y luego falla durante
+        # FRAME_FAIL_TIMEOUT), para que la ventana que se comprueba sea la del primer fotograma
+        with mock.patch.object(execute, "_open_capture", return_value=FakeCapture(frames=2)):
+            self.assertTrue(self.pipeline.set_camera(execute.CameraSource(**self.LOCAL_1)))
+        self.model.detections = HELMET
+        self.pipeline.thread.start()
+        self.addCleanup(self.pipeline.stop)
+        for _ in range(150):  # Hasta 3 s a que el bucle procese un fotograma de la cámara nueva
+            if self.pipeline.items["helmet"]["ok"] == 1:
+                break
+            execute.time.sleep(0.02)
+        self.assertEqual(self.pipeline.items["helmet"]["ok"], 1)
+        self.assertFalse(self.pipeline.violation_confirmed)
+        self.assertEqual(sum(self.pipeline._recent_violations), 0)
 
 
 class MaskUrlTest(unittest.TestCase):
