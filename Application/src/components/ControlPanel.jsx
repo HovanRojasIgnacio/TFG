@@ -1,12 +1,5 @@
 import { DEFAULT_CONF } from '../config';
-
-function getCameraDisplayName(camera) {
-  if (!camera) return "Cámara no seleccionada";
-  if (camera.type === "local") {
-    return camera.name || `Cámara Local ${camera.index}`;
-  }
-  return camera.name || camera.url;
-}
+import { getCameraDisplayName } from '../lib/telemetry';
 
 export default function ControlPanel({
   confThreshold,

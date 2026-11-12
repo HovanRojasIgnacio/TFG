@@ -1,9 +1,4 @@
-// Colores con contraste suficiente sobre el fondo de la tarjeta (los mismos de App.css)
-function getSafetyColor(score) {
-  if (score >= 90) return "#34d399";
-  if (score >= 60) return "#fbbf24";
-  return "#fecaca";
-}
+import { getSafetyColor } from '../lib/telemetry';
 
 export default function MetricsCard({ isActive, fps, safetyScore, items, itemNames, neutral }) {
   // Una fila por elemento de protección del modo actual (casco, chaleco...), en el orden del perfil
