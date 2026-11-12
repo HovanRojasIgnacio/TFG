@@ -1,4 +1,5 @@
 """Pruebas de los perfiles y del recuento: python -m unittest discover Inference/tests"""
+import itertools
 import json
 import os
 import sys
@@ -76,6 +77,15 @@ class CascoHierarchyTest(unittest.TestCase):
         self.assertEqual(result.highest_violation, 0.8)
 
 
+    def test_a_head_at_mid_height_does_not_hide_the_person(self):
+        # La cabeza con casco de un vecino (cuya persona no se detectó) cae a media altura de este operario sin
+        # casco: no está en la zona de la cabeza, así que no lo representa y su infracción sigue contando
+        names = ["person_no_helmet", "head_with_helmet"]
+        result = counting.count(self.profile, names, [0.9, 0.9], [[0, 0, 100, 300], [40, 130, 60, 170]])
+        self.assertEqual(result.flags, [True, True])
+        self.assertEqual(result.items, {"helmet": {"ok": 1, "missing": 1}})
+
+
 class VestProfileTest(unittest.TestCase):
     def setUp(self):
         self.profile = profiles.parse("casco_chaleco", VEST_PROFILE)
@@ -105,6 +115,19 @@ class VestProfileTest(unittest.TestCase):
         result = counting.count(self.profile, ["Helmet", "NoHelmet", "Vest"], [0.4, 0.7, 0.9], boxes)
         self.assertEqual(result.items, {"helmet": {"ok": 0, "missing": 1}, "vest": {"ok": 1, "missing": 0}})
         self.assertEqual(result.highest_violation, 0.7)
+
+    def test_contradictions_do_not_depend_on_the_order_of_the_boxes(self):
+        # B contradice a A y a C, que no se solapan entre sí: C (la más fiable) anula a B y A se queda
+        a, b, c = [0, 0, 100, 100], [20, 0, 120, 100], [40, 0, 140, 100]
+        self.assertGreater(counting._iou(a, b), counting.DUPLICATE_IOU)
+        self.assertGreater(counting._iou(b, c), counting.DUPLICATE_IOU)
+        self.assertLessEqual(counting._iou(a, c), counting.DUPLICATE_IOU)
+        boxes = {"A": ("NoHelmet", 0.5, a), "B": ("Helmet", 0.7, b), "C": ("NoHelmet", 0.9, c)}
+        for order in itertools.permutations(boxes):
+            with self.subTest(order=order):
+                names, confs, coords = zip(*(boxes[k] for k in order))
+                result = counting.count(self.profile, list(names), list(confs), list(coords))
+                self.assertEqual(result.items["helmet"], {"ok": 0, "missing": 2})
 
     def test_two_workers_side_by_side_both_count(self):
         boxes = [[100, 100, 200, 200], [190, 100, 290, 200]]  # Se tocan, pero no son la misma cabeza

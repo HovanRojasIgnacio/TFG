@@ -37,6 +37,9 @@ def _iou(a: Box, b: Box) -> float:
 
 
 DUPLICATE_IOU = 0.5  # Dos recuadros de persona que se solapan más que esto son el mismo operario
+# Una cabeza solo representa a una persona si su centro está en esta fracción superior del recuadro: la cabeza de
+# un vecino situada a media altura de otra persona no debe ocultarla
+HEAD_ZONE = 0.4
 
 
 def counted_flags(profile: Profile, class_names: Sequence[str],
@@ -60,7 +63,9 @@ def counted_flags(profile: Profile, class_names: Sequence[str],
     if boxes is not None:
         persons = [i for i, lvl in enumerate(levels) if lvl == 1]
         for h in (j for j, lvl in enumerate(levels) if lvl == 0):
-            inside = [i for i in persons if _contains(boxes[i], boxes[h])]
+            head_cy = (boxes[h][1] + boxes[h][3]) / 2
+            inside = [i for i in persons if _contains(boxes[i], boxes[h])
+                      and head_cy <= boxes[i][1] + HEAD_ZONE * (boxes[i][3] - boxes[i][1])]
             if inside:
                 owner = min(inside, key=lambda i: _head_distance(boxes[i], boxes[h]))
                 represented.update(i for i in inside if i == owner or rules[i].state == rules[h].state)
@@ -90,11 +95,16 @@ def counted_flags(profile: Profile, class_names: Sequence[str],
 
 def _drop_contradictions(rules, boxes: Sequence[Box], confs: Sequence[float], flags: List[bool]) -> None:
     """De dos recuadros solapados que dicen lo contrario del mismo elemento, deja de contar el menos fiable."""
-    for i in range(len(rules)):
-        for j in range(i + 1, len(rules)):
-            if flags[i] and flags[j] and rules[i].item is not None and rules[i].item == rules[j].item \
-                    and rules[i].state != rules[j].state and _iou(boxes[i], boxes[j]) > DUPLICATE_IOU:
-                flags[j if confs[i] >= confs[j] else i] = False
+    # De más a menos confiable: un recuadro que sigue contando anula a los menos confiables que lo contradicen, y
+    # uno ya anulado no anula a ninguno (el resultado no depende del orden en que llegan los recuadros)
+    for i in sorted(range(len(rules)), key=lambda k: -confs[k]):
+        if not flags[i]:
+            continue
+        for j in range(len(rules)):
+            if j != i and flags[j] and confs[j] <= confs[i] and rules[i].item is not None \
+                    and rules[i].item == rules[j].item and rules[i].state != rules[j].state \
+                    and _iou(boxes[i], boxes[j]) > DUPLICATE_IOU:
+                flags[j] = False
 
 
 class Counts(NamedTuple):

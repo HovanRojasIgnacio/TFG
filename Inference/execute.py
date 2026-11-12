@@ -214,11 +214,13 @@ def load_log() -> List[Dict]:
     try:
         with open(LOG_FILE, encoding="utf-8") as f:
             entries = json.load(f)
+        if not isinstance(entries, list):
+            raise ValueError("no es una lista")
         return [e for e in entries if isinstance(e, dict) and os.path.isfile(
             os.path.join(infractions_dir, os.path.basename(str(e.get("image_path", "")))))][-LOG_SIZE:]
     except FileNotFoundError:
         return []
-    except (OSError, ValueError, AttributeError) as e:
+    except (OSError, ValueError, AttributeError, RecursionError) as e:
         logger.warning("No se pudo leer el registro de infracciones %s: %s", LOG_FILE, e)
         return []
 
@@ -768,11 +770,13 @@ class VideoPipeline:
             if requested != current_source:
                 current_source = requested
                 self._release_cap()
+                self._clear_detections()  # Los contadores y la ventana de infracciones eran de la cámara anterior
                 next_retry = 0.0
                 retry_delay = RECONNECT_MIN_DELAY
             if handover is not None:
                 source, cap = handover
                 if source is current_source:
+                    self._clear_detections()  # Nada de la cámara anterior debe confirmar una infracción de esta
                     self._cap = LatestFrameReader(cap) if source.type == "ip" else cap
                     self.camera_error = None
                     logger.info("Cámara conectada: %s", _source_label(source))
@@ -1016,4 +1020,5 @@ async def video_feed():
 if __name__ == "__main__":
     import uvicorn
     # GUARDWATCH_HOST=127.0.0.1 limita el acceso a este equipo (por defecto, toda la red local)
-    uvicorn.run(app, host=os.environ.get("GUARDWATCH_HOST", "0.0.0.0"), port=8000)
+    # El flujo MJPEG no termina solo: sin este límite, Ctrl+C esperaría a que el navegador cierre la pestaña
+    uvicorn.run(app, host=os.environ.get("GUARDWATCH_HOST", "0.0.0.0"), port=8000, timeout_graceful_shutdown=3)
