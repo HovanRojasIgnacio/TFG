@@ -117,10 +117,10 @@ python -m unittest discover -s Inference/tests
 ```
 
 ```bash
-cd Application && npm run lint && npm run build
+cd Application && npm run lint && npm test && npm run build
 ```
 
-Las pruebas del recuento y de los perfiles solo usan la biblioteca estándar. Las de la API y del pipeline de vídeo (`tests/test_api.py`) usan un modelo simulado, sin GPU ni cámara, pero necesitan los paquetes de `requirements.txt` y `httpx`: ejecútalas con el Python de `Inference/.venv`; sin esos paquetes se omiten. GitHub Actions ejecuta en cada push el lint y la compilación del panel y las pruebas que solo usan la biblioteca estándar (`.github/workflows/ci.yml`).
+Las pruebas del recuento y de los perfiles solo usan la biblioteca estándar. Las de la API y del pipeline de vídeo (`tests/test_api.py`) usan un modelo simulado, sin GPU ni cámara, pero necesitan los paquetes de `requirements.txt` y `httpx` (`pip install httpx`, no está en `requirements.txt`): ejecútalas con el Python de `Inference/.venv`; sin esos paquetes se omiten. GitHub Actions ejecuta en cada push y pull request el lint, las pruebas y la compilación del panel, y la comprobación de sintaxis y las pruebas del backend que solo usan la biblioteca estándar (`.github/workflows/ci.yml`).
 
 ## Modos de detección
 
