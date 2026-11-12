@@ -157,10 +157,10 @@ if STARTUP_PROFILE not in profiles.discover():
     raise SystemExit(f"GUARDWATCH_PROFILE={STARTUP_PROFILE!r} no es un perfil instalado. Disponibles: "
                      f"{', '.join(profiles.discover()) or 'ninguno'} (carpetas de {profiles.PROFILES_DIR})")
 
-# Camera detection cache
+# Caché de detección de cámaras
 _camera_cache = {"cameras": [], "last_update": 0}
 _camera_cache_lock = threading.Lock()
-CAMERA_CACHE_TTL = 10.0  # Cache for 10 seconds
+CAMERA_CACHE_TTL = 10.0  # La caché dura 10 segundos
 ALLOWED_IP_SCHEMES = ("http://", "https://", "rtsp://")  # Esquemas admitidos para cámaras IP
 VIEWER_TIMEOUT = 2.0  # Segundos sin pedir frames tras los que se deja de codificar el stream
 RECONNECT_MIN_DELAY = 2.0 # Espera inicial entre reintentos de conexión (s)
@@ -268,7 +268,7 @@ def mask_url(url: Optional[str]) -> Optional[str]:
 
 def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
                          skip_index: Optional[int] = None) -> List[Dict]:
-    """Detect available local cameras with caching.
+    """Detecta las cámaras locales disponibles, con caché.
 
     skip_index: índice de la cámara en uso por el pipeline; no se reabre para no interrumpirla.
     """
@@ -310,7 +310,7 @@ def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
                 else:
                     consecutive_failures += 1
             except Exception as e:
-                logger.warning("Error detecting camera %s: %s", i, e)
+                logger.warning("Error al detectar la cámara %s: %s", i, e)
                 consecutive_failures += 1
             finally:
                 if cap:
@@ -327,7 +327,7 @@ def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
 
 
 class CameraSource(BaseModel):
-    type: str  # "local" or "ip"
+    type: str  # "local" o "ip"
     index: Optional[int] = None
     url: Optional[str] = None
     name: Optional[str] = None
@@ -358,7 +358,7 @@ def _open_capture(source: CameraSource):
             return None
         return cap
     except Exception as e:
-        logger.error("Failed to open camera: %s", e)
+        logger.error("No se pudo abrir la cámara: %s", e)
         return None
 
 
@@ -393,7 +393,7 @@ class LatestFrameReader:
                     self._seq += 1
                     self._cond.notify_all()
         except Exception as e:
-            logger.error("IP camera reader failed: %s", e)
+            logger.error("Falló la lectura de la cámara IP: %s", e)
         finally:
             # Se libera en este hilo para no cerrar la cámara a mitad de una lectura
             self._cap.release()
@@ -432,7 +432,7 @@ def _connect_camera(source: CameraSource, timeout: float = CAMERA_TEST_TIMEOUT):
             if cap is not None and cap.isOpened():
                 ok, _ = cap.read()
         except Exception as e:
-            logger.warning("Camera test failed: %s", e)
+            logger.warning("Falló la prueba de la cámara: %s", e)
         with result_lock:
             if ok and not result.get("abandoned"):
                 result["cap"] = cap
@@ -450,7 +450,7 @@ def _connect_camera(source: CameraSource, timeout: float = CAMERA_TEST_TIMEOUT):
             return result["cap"]
         result["abandoned"] = True
     if thread.is_alive():
-        logger.warning("Camera connection test timed out after %ss", timeout)
+        logger.warning("La prueba de conexión de la cámara superó el tiempo máximo (%ss)", timeout)
     return None
 
 
@@ -513,7 +513,7 @@ class VideoPipeline:
         return a.type == b.type and a.index == b.index and a.url == b.url
 
     def set_camera(self, source: CameraSource) -> bool:
-        """Change the camera source. Returns True if successful."""
+        """Cambia la fuente de la cámara. Devuelve True si lo consigue."""
         if self._same_source(source, self.camera_source):
             if self.camera_error:
                 # La cámara actual está fallando: elegirla de nuevo pide reconectar ya, sin esperar al
@@ -538,7 +538,7 @@ class VideoPipeline:
         return True
 
     def get_camera_info(self, force_refresh: bool = False, probe: bool = True) -> Dict:
-        """Get current camera info and available cameras.
+        """Devuelve la información de la cámara actual y las cámaras disponibles.
 
         probe=False devuelve la lista en caché sin abrir ninguna cámara (para el sondeo frecuente).
         """
@@ -550,7 +550,7 @@ class VideoPipeline:
             else:
                 available = _camera_cache["cameras"]
         except Exception as e:
-            logger.error("Camera detection failed: %s", e)
+            logger.error("Falló la detección de cámaras: %s", e)
             available = []
         return {
             "current": {
@@ -664,7 +664,7 @@ class VideoPipeline:
 
     def _process_frame(self, frame, source: CameraSource, current_time: float, frame_start: float):
         """Detección, dibujo, registro de infracciones y codificación de un frame."""
-        # For local cameras, flip horizontally (mirror effect)
+        # En las cámaras locales se voltea horizontalmente (efecto espejo)
         if source.type == "local":
             frame = cv2.flip(frame, 1)
 
@@ -775,7 +775,7 @@ class VideoPipeline:
                 if source is current_source:
                     self._cap = LatestFrameReader(cap) if source.type == "ip" else cap
                     self.camera_error = None
-                    logger.info("Camera connected: %s", _source_label(source))
+                    logger.info("Cámara conectada: %s", _source_label(source))
                     last_frame_time = time.time()
                     prev_time = time.time()
                 else:
@@ -794,7 +794,7 @@ class VideoPipeline:
                     if cap and cap.isOpened():
                         self._cap = LatestFrameReader(cap) if current_source.type == "ip" else cap
                         self.camera_error = None
-                        logger.info("Camera connected: %s", _source_label(current_source))
+                        logger.info("Cámara conectada: %s", _source_label(current_source))
                         retry_delay = RECONNECT_MIN_DELAY
                         last_frame_time = time.time()
                         prev_time = time.time()
@@ -806,7 +806,7 @@ class VideoPipeline:
                             pass
                     self.camera_error = f"No se pudo conectar a la cámara: {_source_label(current_source)}"
                     next_retry = time.time() + retry_delay
-                    logger.warning("Camera unavailable, retrying in %.0fs", retry_delay)
+                    logger.warning("Cámara no disponible, se reintenta en %.0fs", retry_delay)
                     retry_delay = min(retry_delay * 2, RECONNECT_MAX_DELAY)
                 time.sleep(0.5)
                 continue
@@ -814,7 +814,7 @@ class VideoPipeline:
             try:
                 success, frame = self._cap.read()
             except Exception as e:
-                logger.error("Camera read failed: %s", e)
+                logger.error("Falló la lectura de la cámara: %s", e)
                 success = False
                 frame = None
             
@@ -823,7 +823,7 @@ class VideoPipeline:
                 # puede tardar hasta IP_READ_TIMEOUT_MS
                 fail_timeout = IP_FRAME_FAIL_TIMEOUT if current_source.type == "ip" else FRAME_FAIL_TIMEOUT
                 if time.time() - last_frame_time > fail_timeout:
-                    logger.warning("No frames for %.0fs, releasing camera", fail_timeout)
+                    logger.warning("Sin frames durante %.0fs, se libera la cámara", fail_timeout)
                     self._release_cap()
                     self.camera_error = "Error de lectura de cámara - cámara desconectada"
                     retry_delay = RECONNECT_MIN_DELAY
@@ -887,19 +887,19 @@ def update_settings(payload: SettingsUpdate):
 
 @app.get("/api/cameras")
 def get_cameras(refresh: bool = False):
-    """Get available cameras and current selection."""
+    """Devuelve las cámaras disponibles y la seleccionada."""
     return pipeline.get_camera_info(force_refresh=refresh)
 
 
 @app.post("/api/cameras/refresh")
 def refresh_cameras():
-    """Force refresh of available cameras."""
+    """Fuerza la actualización de las cámaras disponibles."""
     return pipeline.get_camera_info(force_refresh=True)
 
 
 @app.post("/api/cameras/select")
 def select_camera(payload: CameraSource):
-    """Switch to a different camera source."""
+    """Cambia a otra fuente de cámara."""
     if payload.type == "ip":
         # Solo protocolos de red: evita que OpenCV abra rutas de archivo locales u otros esquemas
         if not payload.url or not payload.url.strip().lower().startswith(ALLOWED_IP_SCHEMES):
