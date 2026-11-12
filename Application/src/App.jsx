@@ -26,6 +26,15 @@ function App() {
     }
   });
 
+  // Al reanudar, los datos son los de antes de la pausa hasta que llega la primera respuesta: sin esto, la
+  // alarma de una infracción antigua volvería a mostrarse durante ese instante
+  const toggleActive = () => {
+    if (!isActive) {
+      setTelemetry(prev => ({ ...prev, violations: 0, violation_confirmed: false }));
+    }
+    setIsActive(!isActive);
+  };
+
   const confidence = useConfidence(setTelemetry);
   const cameras = useCameras(setTelemetry, () => setCameraModalOpen(false));
   const profiles = useProfiles(backendOnline, telemetry.profile_loading);
@@ -64,7 +73,7 @@ function App() {
       <main className="main-content" id="contenido" tabIndex={-1}>
         <VideoCard
           isActive={isActive}
-          onToggleActive={() => setIsActive(!isActive)}
+          onToggleActive={toggleActive}
           hasInfraction={isActive && hasAlarm(telemetry)}
           device={telemetry.device}
           weightsFormat={telemetry.weights_format}
