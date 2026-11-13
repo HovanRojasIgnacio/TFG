@@ -12,6 +12,7 @@ import MetricsCard from './components/MetricsCard';
 import InfractionGallery from './components/InfractionGallery';
 import EvidenceModal from './components/EvidenceModal';
 import CameraModal from './components/CameraModal';
+import ErrorMessage from './components/ErrorMessage';
 
 function App() {
   const [isActive, setIsActive] = useState(true);
@@ -65,9 +66,9 @@ function App() {
       </p>
 
       {isActive && backendOnline === false && (
-        <div className="connection-banner" role="alert">
-          <span aria-hidden="true">⚠ </span>Sin conexión con el servidor. Los datos pueden no estar al día. Se está reintentando…
-        </div>
+        <ErrorMessage className="connection-banner">
+          Sin conexión con el servidor. Los datos pueden no estar al día. Se está reintentando…
+        </ErrorMessage>
       )}
 
       <main className="main-content" id="contenido" tabIndex={-1}>
