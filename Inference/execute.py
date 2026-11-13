@@ -1,13 +1,6 @@
 import os
-# Evita el error de Windows "OpenMP runtime already initialized" cuando torch, numpy y
-# OpenCV cargan cada uno su propia copia de libiomp (workaround habitual). Debe fijarse
-# antes de importar cualquiera de ellos.
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import venv_bootstrap
-if __name__ == "__main__":
-    venv_bootstrap.ensure_venv()  # Usa Inference/.venv (PyTorch con CUDA) aunque se lance con otro Python
-# Ultralytics no debe instalar paquetes por su cuenta con pip (puede modificar el Python global)
-os.environ.setdefault("YOLO_AUTOINSTALL", "False")
+venv_bootstrap.setup(__name__ == "__main__")
 # RTSP por TCP: FFmpeg usa UDP por defecto y, por Wi-Fi, los paquetes perdidos dan frames
 # corruptos o grises. Se puede cambiar con la variable de entorno (p. ej. "rtsp_transport;udp")
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")

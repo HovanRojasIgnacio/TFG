@@ -440,13 +440,17 @@ class VideoPipeline:
             source, cap = handover
             if source is self._current_source:
                 self._clear_detections()  # Nada de la cámara anterior debe confirmar una infracción de esta
-                self._cap = cameras.LatestFrameReader(cap) if source.type == "ip" else cap
-                self.camera_error = None
-                logger.info("Cámara conectada: %s", cameras.source_label(source))
-                self._last_frame_time = time.time()
-                self._prev_time = time.time()
+                self._use_camera(source, cap)
             else:
                 cap.release()
+
+    def _use_camera(self, source: cameras.CameraSource, cap):
+        """Empieza a leer de la cámara ya abierta: la guarda, borra el error y reinicia los tiempos del bucle."""
+        self._cap = cameras.LatestFrameReader(cap) if source.type == "ip" else cap
+        self.camera_error = None
+        logger.info("Cámara conectada: %s", cameras.source_label(source))
+        self._last_frame_time = time.time()
+        self._prev_time = time.time()
 
     def _reconnect(self):
         """Sin cámara abierta (arranque, cambio, fallo o desconexión): reintento con espera creciente."""
@@ -460,12 +464,8 @@ class VideoPipeline:
                     cap.release()
                 return
             if cap and cap.isOpened():
-                self._cap = cameras.LatestFrameReader(cap) if source.type == "ip" else cap
-                self.camera_error = None
-                logger.info("Cámara conectada: %s", cameras.source_label(source))
                 self._retry_delay = RECONNECT_MIN_DELAY
-                self._last_frame_time = time.time()
-                self._prev_time = time.time()
+                self._use_camera(source, cap)
                 return
             if cap:
                 try:

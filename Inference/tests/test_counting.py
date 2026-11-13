@@ -116,9 +116,9 @@ class VestProfileTest(unittest.TestCase):
     def test_contradictions_do_not_depend_on_the_order_of_the_boxes(self):
         # B contradice a A y a C, que no se solapan entre sí: C (la más fiable) anula a B y A se queda
         a, b, c = [0, 0, 100, 100], [20, 0, 120, 100], [40, 0, 140, 100]
-        self.assertGreater(counting._iou(a, b), counting.DUPLICATE_IOU)
-        self.assertGreater(counting._iou(b, c), counting.DUPLICATE_IOU)
-        self.assertLessEqual(counting._iou(a, c), counting.DUPLICATE_IOU)
+        self.assertGreater(counting.iou(a, b), counting.DUPLICATE_IOU)
+        self.assertGreater(counting.iou(b, c), counting.DUPLICATE_IOU)
+        self.assertLessEqual(counting.iou(a, c), counting.DUPLICATE_IOU)
         boxes = {"A": ("NoHelmet", 0.5, a), "B": ("Helmet", 0.7, b), "C": ("NoHelmet", 0.9, c)}
         for order in itertools.permutations(boxes):
             with self.subTest(order=order):

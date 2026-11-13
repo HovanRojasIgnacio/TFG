@@ -9,13 +9,8 @@ servidor, copia best.pt a Inference/profiles/<id>/ junto a su profile.json (véa
 """
 import argparse
 import os
-# Igual que en execute.py: debe fijarse antes de importar torch, numpy u OpenCV
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import venv_bootstrap
-if __name__ == "__main__":
-    venv_bootstrap.ensure_venv()  # Usa Inference/.venv (PyTorch con CUDA) aunque se lance con otro Python
-# Ultralytics no debe instalar paquetes por su cuenta con pip (puede modificar el Python global)
-os.environ.setdefault("YOLO_AUTOINSTALL", "False")
+venv_bootstrap.setup(__name__ == "__main__")
 
 from ultralytics import YOLO
 

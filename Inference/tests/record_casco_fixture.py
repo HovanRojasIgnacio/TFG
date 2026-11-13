@@ -19,11 +19,8 @@ import sys
 
 INFERENCE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, INFERENCE_DIR)
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import venv_bootstrap
-if __name__ == "__main__":
-    venv_bootstrap.ensure_venv()
-os.environ.setdefault("YOLO_AUTOINSTALL", "False")
+venv_bootstrap.setup(__name__ == "__main__")
 
 from ultralytics import YOLO
 
