@@ -1,32 +1,39 @@
-import { useRef } from 'react';
-import { useModalFocus } from '../hooks/useModalFocus';
+import { useEffect, useRef } from 'react';
 
-/** Diálogo modal accesible: foco atrapado, Escape y clic fuera lo cierran. */
+/** Diálogo modal accesible basado en <dialog>: el navegador gestiona el foco, Escape y el fondo. */
 export default function Modal({ label, onClose, className = '', children }) {
-  const modalRef = useModalFocus(onClose);
+  const dialogRef = useRef(null);
   // Solo cierra un clic que empieza y termina en el fondo. Si se arrastra para seleccionar texto dentro del
   // diálogo y se suelta fuera, el navegador envía el clic al fondo y, sin esta comprobación, se cerraba.
-  const pressedOnOverlay = useRef(false);
+  const pressedOnBackdrop = useRef(false);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const opener = document.activeElement;
+    if (!dialog.open) dialog.showModal();
+    // React quita el diálogo de la página antes de ejecutar esta limpieza, así que el navegador ya no devuelve
+    // el foco por sí solo: se devuelve aquí al elemento que lo abrió.
+    return () => {
+      if (dialog.open) dialog.close();
+      opener?.focus?.();
+    };
+  }, []);
 
   return (
-    <div
-      className="modal-overlay"
-      onMouseDown={(e) => { pressedOnOverlay.current = e.target === e.currentTarget; }}
+    <dialog
+      ref={dialogRef}
+      className={`modal-content ${className}`.trim()}
+      aria-label={label}
+      onCancel={(e) => { e.preventDefault(); onClose(); }}
+      onMouseDown={(e) => { pressedOnBackdrop.current = e.target === e.currentTarget; }}
       onClick={(e) => {
-        if (pressedOnOverlay.current && e.target === e.currentTarget) onClose();
+        if (pressedOnBackdrop.current && e.target === e.currentTarget) onClose();
       }}
     >
-      <div
-        className={`modal-content ${className}`.trim()}
-        ref={modalRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
-      >
+      <div className="modal-body">
         <button type="button" className="modal-close" aria-label="Cerrar" onClick={onClose}>×</button>
         {children}
       </div>
-    </div>
+    </dialog>
   );
 }
