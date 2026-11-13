@@ -3,7 +3,7 @@
 Este proyecto consiste en una aplicación web completa para el monitoreo en tiempo real del uso de cascos de seguridad y, opcionalmente, chalecos de alta visibilidad (EPIs). El sistema utiliza un modelo personalizado **YOLO26s** optimizado para ejecutarse mediante aceleración por hardware en una GPU NVIDIA RTX 5060.
 
 La arquitectura se divide en:
-* **Backend (`Inference/`):** Servidor API de alto rendimiento con **FastAPI** que gestiona la webcam, la inferencia de IA y el streaming de vídeo.
+* **Backend (`Inference/`):** Servidor API de alto rendimiento con **FastAPI** que gestiona la webcam, la inferencia de IA y el streaming de vídeo. Se organiza en `execute.py` (API), `video.py` (detector y bucle de vídeo), `cameras.py` (cámaras) y `evidence.py` (capturas y registro).
 * **Frontend (`Application/`):** Panel de control interactivo con interfaz oscura desarrollado en **React (Vite)**.
 
 ---
