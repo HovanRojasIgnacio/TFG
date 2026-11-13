@@ -1,5 +1,6 @@
 import { DEFAULT_CONF } from '../config';
 import { getCameraDisplayName } from '../lib/telemetry';
+import ErrorMessage from './ErrorMessage';
 
 export default function ControlPanel({
   confThreshold,
@@ -43,11 +44,7 @@ export default function ControlPanel({
             ? `Cargando modelo «${loadingProfile}»… (la primera vez tarda alrededor de un minuto)`
             : "Elementos de protección que se comprueban."}
         </p>
-        {profileError && (
-          <div className="camera-error" role="alert">
-            <span aria-hidden="true">⚠ </span>{profileError}
-          </div>
-        )}
+        {profileError && <ErrorMessage>{profileError}</ErrorMessage>}
       </div>
 
       <div className="control-group">
@@ -103,11 +100,7 @@ export default function ControlPanel({
             <span className="camera-chevron" aria-hidden="true">▼</span>
           </button>
         </div>
-        {cameraError && (
-          <div className="camera-error" role="status">
-            <span aria-hidden="true">⚠ </span>{cameraError}
-          </div>
-        )}
+        {cameraError && <ErrorMessage role="status">{cameraError}</ErrorMessage>}
       </div>
     </section>
   );

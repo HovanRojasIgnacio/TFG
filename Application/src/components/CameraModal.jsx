@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Modal from './Modal';
+import ErrorMessage from './ErrorMessage';
 
 export default function CameraModal({
   cameras,
@@ -19,11 +20,7 @@ export default function CameraModal({
     <Modal label="Seleccionar fuente de vídeo" className="camera-modal" onClose={onClose}>
       <h2>Seleccionar Fuente de Vídeo</h2>
 
-      {error && (
-        <div className="camera-error" role="alert">
-          <span aria-hidden="true">⚠ </span>{error}
-        </div>
-      )}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
 
       {testing && <p className="slider-desc" role="status">Probando la cámara…</p>}
 

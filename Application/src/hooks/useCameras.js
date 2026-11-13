@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { API_BASE, REQUEST_TIMEOUT_MS, CAMERA_SELECT_TIMEOUT_MS } from '../config';
+import { CAMERA_SELECT_TIMEOUT_MS } from '../config';
+import { getJson, postJson } from '../lib/api';
 
 /**
  * Lista de cámaras locales y selección de fuente de vídeo (local o IP).
@@ -15,11 +16,7 @@ export function useCameras(setTelemetry, onSelected) {
   // Cámaras disponibles y cámara actual. Se piden al montar y cada vez que se abre el diálogo: si el
   // backend aún no estaba en marcha al cargar el panel, la lista no se quedaría vacía para siempre.
   const loadCameras = useCallback(() => {
-    fetch(`${API_BASE}/api/cameras`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
-      .then(res => {
-        if (!res.ok) throw new Error(`Error ${res.status} al pedir las cámaras`);
-        return res.json();
-      })
+    getJson("/api/cameras")
       .then(data => {
         setAvailableCameras(data.available_local || []);
         if (data.current) {
@@ -36,20 +33,13 @@ export function useCameras(setTelemetry, onSelected) {
     setSelectError(null);
     setTestingCamera(true);
     try {
-      const response = await fetch(`${API_BASE}/api/cameras/select`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(camera),
-        signal: AbortSignal.timeout(CAMERA_SELECT_TIMEOUT_MS)
-      });
-      if (response.ok) {
-        const data = await response.json();
+      const { ok, data } = await postJson("/api/cameras/select", camera, { timeoutMs: CAMERA_SELECT_TIMEOUT_MS });
+      if (ok) {
         setTelemetry(prev => ({ ...prev, camera: data.camera, camera_error: null }));
         onSelected();
         return;
       }
-      const error = await response.json();
-      setSelectError(typeof error.detail === "string" ? error.detail : "No se pudo cambiar la cámara");
+      setSelectError(typeof data.detail === "string" ? data.detail : "No se pudo cambiar la cámara");
     } catch {
       setSelectError(networkErrorMessage);
     } finally {
@@ -74,11 +64,8 @@ export function useCameras(setTelemetry, onSelected) {
 
   const refreshCameras = async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/cameras?refresh=true`, {
-        signal: AbortSignal.timeout(CAMERA_SELECT_TIMEOUT_MS)  // Abre cada cámara para comprobarla: tarda
-      });
-      if (!response.ok) throw new Error(`Error ${response.status}`);
-      const data = await response.json();
+      // Abre cada cámara para comprobarla: tarda
+      const data = await getJson("/api/cameras?refresh=true", { timeoutMs: CAMERA_SELECT_TIMEOUT_MS });
       setAvailableCameras(data.available_local || []);
     } catch (error) {
       console.error("Error refreshing cameras:", error);

@@ -1,12 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { API_BASE, REQUEST_TIMEOUT_MS } from '../config';
+import { getJson, postJson } from '../lib/api';
 
 /** Devuelve el estado de /api/profiles, o null si el backend no responde. */
 async function fetchProfiles() {
   try {
-    const res = await fetch(`${API_BASE}/api/profiles`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-    if (!res.ok) return null;
-    const data = await res.json();
+    const data = await getJson("/api/profiles");
     return {
       profiles: Array.isArray(data.profiles) ? data.profiles : [],
       current: data.current ?? null,
@@ -14,7 +12,7 @@ async function fetchProfiles() {
       error: data.error ?? null
     };
   } catch {
-    return null;  // Sin backend: se vuelve a pedir cuando useTelemetry lo vea en línea
+    return null;  // Sin backend o con un error del servidor: se vuelve a pedir cuando useTelemetry lo vea en línea
   }
 }
 
@@ -44,15 +42,9 @@ export function useProfiles(backendOnline, telemetryLoading) {
   const selectProfile = async (id) => {
     setSelectError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/profiles/select`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-      });
-      if (!res.ok) {
-        const error = await res.json().catch(() => ({}));
-        setSelectError(typeof error.detail === "string" ? error.detail : "No se pudo cambiar el modo");
+      const { ok, data } = await postJson("/api/profiles/select", { id });
+      if (!ok) {
+        setSelectError(typeof data.detail === "string" ? data.detail : "No se pudo cambiar el modo");
       }
     } catch {
       setSelectError("Error de conexión al cambiar el modo de detección");
