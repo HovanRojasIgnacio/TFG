@@ -17,8 +17,11 @@ try:
     import numpy as np
     from fastapi.testclient import TestClient
 
-    import execute
+    import execute  # Primero: fija variables de entorno que deben preceder a torch y OpenCV
+    import cameras
+    import evidence
     import profiles
+    import video
     from runtime import Runtime
 except ImportError as e:  # Entorno sin las dependencias del servidor (por ejemplo, la integración continua)
     raise unittest.SkipTest(f"faltan las dependencias del servidor: {e}")
@@ -60,7 +63,7 @@ class PipelineTestCase(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.log_file = os.path.join(self.tmp.name, "infractions.json")
         for name, value in (("infractions_dir", self.tmp.name), ("LOG_FILE", self.log_file)):
-            patcher = mock.patch.object(execute, name, value)
+            patcher = mock.patch.object(evidence, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
         self.model = FakeModel()
@@ -69,8 +72,8 @@ class PipelineTestCase(unittest.TestCase):
         self.now = 1_000_000.0
 
     def new_pipeline(self):
-        detector = execute.Detector(profiles.load("casco_chaleco"), self.model, Runtime("best.pt", "cuda", False))
-        return execute.VideoPipeline(detector, start=False)
+        detector = video.Detector(profiles.load("casco_chaleco"), self.model, Runtime("best.pt", "cuda", False))
+        return video.VideoPipeline(detector, start=False)
 
     def process(self, detections, seconds=0.1):
         self.model.detections = detections
@@ -90,7 +93,7 @@ class ViolationConfirmationTest(PipelineTestCase):
         self.assertEqual(len(self.pipeline.infractions_log), 0)
 
     def test_several_frames_confirm_and_record_once(self):
-        for _ in range(execute.VIOLATION_MIN_FRAMES + 2):
+        for _ in range(video.VIOLATION_MIN_FRAMES + 2):
             self.process(NO_HELMET)
         self.assertTrue(self.pipeline.violation_confirmed)
         self.assertEqual(len(self.snapshots()), 1)  # Las siguientes esperan los 4 s entre capturas
@@ -105,9 +108,9 @@ class ViolationConfirmationTest(PipelineTestCase):
         self.assertTrue(self.pipeline.violation_confirmed)
 
     def test_confirmation_ends_when_the_violation_disappears(self):
-        for _ in range(execute.VIOLATION_WINDOW):
+        for _ in range(video.VIOLATION_WINDOW):
             self.process(NO_HELMET)
-        for _ in range(execute.VIOLATION_WINDOW):
+        for _ in range(video.VIOLATION_WINDOW):
             self.process(HELMET)
         self.assertFalse(self.pipeline.violation_confirmed)
         self.assertEqual(self.pipeline.violations, 0)
@@ -115,7 +118,7 @@ class ViolationConfirmationTest(PipelineTestCase):
 
 class InfractionLogTest(PipelineTestCase):
     def record_one(self):
-        for _ in range(execute.VIOLATION_MIN_FRAMES):
+        for _ in range(video.VIOLATION_MIN_FRAMES):
             self.process(NO_HELMET)
         self.assertEqual(len(self.pipeline.infractions_log), 1)
 
@@ -152,7 +155,7 @@ class ApiTest(PipelineTestCase):
         self.client = TestClient(execute.app)
 
     def test_stats(self):
-        for _ in range(execute.VIOLATION_MIN_FRAMES):
+        for _ in range(video.VIOLATION_MIN_FRAMES):
             self.process(NO_HELMET)
         data = self.client.get("/api/stats").json()
         self.assertEqual(data["items"], {"helmet": {"ok": 0, "missing": 1}, "vest": {"ok": 0, "missing": 0}})
@@ -194,15 +197,15 @@ class ProfileChangeTest(PipelineTestCase):
     def casco_detector(self, *_args, **_kwargs):
         model = FakeModel()
         model.names = CASCO_NAMES
-        return execute.Detector(profiles.load("casco"), model, Runtime("best.pt", "cuda", False))
+        return video.Detector(profiles.load("casco"), model, Runtime("best.pt", "cuda", False))
 
     def load(self, profile_id, loader):
-        with mock.patch.object(execute, "load_detector", loader), mock.patch.object(execute.time, "sleep"):
+        with mock.patch.object(video, "load_detector", loader), mock.patch.object(video.time, "sleep"):
             self.pipeline.profile_loading = profile_id  # Lo que deja select_profile antes de lanzar el hilo
             self.pipeline._load_profile(profile_id)
 
     def test_new_mode_replaces_the_detector_and_clears_the_counters(self):
-        for _ in range(execute.VIOLATION_MIN_FRAMES):
+        for _ in range(video.VIOLATION_MIN_FRAMES):
             self.process(NO_HELMET)
         self.load("casco", self.casco_detector)
         self.assertEqual(self.pipeline.detector.profile.id, "casco")
@@ -230,7 +233,7 @@ class ProfileChangeTest(PipelineTestCase):
             self.pipeline.select_profile("../casco")
         self.assertFalse(self.pipeline.select_profile("casco_chaleco"))  # Ya es el actual
         self.pipeline.profile_loading = "casco"
-        with self.assertRaises(execute.ProfileBusy):
+        with self.assertRaises(video.ProfileBusy):
             self.pipeline.select_profile("casco")
 
 
@@ -257,22 +260,22 @@ class CameraTest(PipelineTestCase):
     LOCAL_1 = dict(type="local", index=1, name="Otra")
 
     def test_selecting_the_camera_in_use_connects_nothing(self):
-        with mock.patch.object(execute, "_open_capture") as open_capture:
-            self.assertTrue(self.pipeline.set_camera(execute.CameraSource(type="local", index=0, name="x")))
+        with mock.patch.object(cameras, "open_capture") as open_capture:
+            self.assertTrue(self.pipeline.set_camera(cameras.CameraSource(type="local", index=0, name="x")))
         open_capture.assert_not_called()
 
     def test_a_working_camera_is_handed_to_the_video_loop_already_open(self):
         cap = FakeCapture()
-        with mock.patch.object(execute, "_open_capture", return_value=cap):
-            self.assertTrue(self.pipeline.set_camera(execute.CameraSource(**self.LOCAL_1)))
+        with mock.patch.object(cameras, "open_capture", return_value=cap):
+            self.assertTrue(self.pipeline.set_camera(cameras.CameraSource(**self.LOCAL_1)))
         self.assertEqual(self.pipeline.camera_source.index, 1)
         self.assertIs(self.pipeline._handover[1], cap)
         self.assertFalse(cap.released)
 
     def test_a_camera_without_frames_is_refused_and_released(self):
         for cap in (FakeCapture(frames=0), FakeCapture(opened=False)):
-            with self.subTest(opened=cap.opened), mock.patch.object(execute, "_open_capture", return_value=cap):
-                self.assertFalse(self.pipeline.set_camera(execute.CameraSource(**self.LOCAL_1)))
+            with self.subTest(opened=cap.opened), mock.patch.object(cameras, "open_capture", return_value=cap):
+                self.assertFalse(self.pipeline.set_camera(cameras.CameraSource(**self.LOCAL_1)))
                 self.assertEqual(self.pipeline.camera_source.index, 0)  # Sigue la cámara anterior
                 self.assertTrue(cap.released)
 
@@ -284,32 +287,32 @@ class CameraTest(PipelineTestCase):
         def slow_open(_source):
             release.wait(5)
             return cap
-        with mock.patch.object(execute, "_open_capture", slow_open), self.assertLogs("guardwatch", level="WARNING"):
-            self.assertIsNone(execute._connect_camera(execute.CameraSource(**self.LOCAL_1), timeout=0.05))
+        with mock.patch.object(cameras, "open_capture", slow_open), self.assertLogs("guardwatch", level="WARNING"):
+            self.assertIsNone(cameras.connect_camera(cameras.CameraSource(**self.LOCAL_1), timeout=0.05))
         release.set()
         for _ in range(100):  # La prueba abandonada libera la cámara cuando por fin se abre
             if cap.released:
                 break
-            execute.time.sleep(0.01)
+            video.time.sleep(0.01)
         self.assertTrue(cap.released)
 
     def test_ip_reader_keeps_only_the_newest_frame_and_releases_the_camera(self):
         cap = FakeCapture(frames=50)
-        reader = execute.LatestFrameReader(cap)
+        reader = cameras.LatestFrameReader(cap)
         ok, frame = reader.read(timeout=1.0)
         self.assertTrue(ok)
         self.assertEqual(frame.shape, (48, 64, 3))
         for _ in range(100):  # Espera a que el hilo lector agote los 50 fotogramas
             if cap.frames == 0:
                 break
-            execute.time.sleep(0.01)
+            video.time.sleep(0.01)
         reader.read(timeout=0.2)                       # Entrega el último pendiente, si lo hay
         self.assertEqual(reader.read(timeout=0.05), (False, None))  # No repite un fotograma ya entregado
         reader.release()
         for _ in range(100):
             if cap.released:
                 break
-            execute.time.sleep(0.01)
+            video.time.sleep(0.01)
         self.assertTrue(cap.released)
 
     def test_video_loop_reports_a_lost_camera_and_reconnects(self):
@@ -320,8 +323,8 @@ class CameraTest(PipelineTestCase):
             opened.append(caps[min(len(opened), 1)])
             return opened[-1]
         fast = dict(FRAME_FAIL_TIMEOUT=0.1, RECONNECT_MIN_DELAY=0.1)
-        patches = [mock.patch.object(execute, name, value) for name, value in fast.items()]
-        patches.append(mock.patch.object(execute, "_open_capture", open_capture))
+        patches = [mock.patch.object(video, name, value) for name, value in fast.items()]
+        patches.append(mock.patch.object(cameras, "open_capture", open_capture))
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -332,7 +335,7 @@ class CameraTest(PipelineTestCase):
             for _ in range(300):  # Hasta 6 s: la primera cámara falla, el bucle la suelta y abre la segunda
                 if len(opened) >= 2 and self.pipeline.items["helmet"]["ok"] == 1:
                     break
-                execute.time.sleep(0.02)
+                video.time.sleep(0.02)
         self.assertGreaterEqual(len(opened), 2)
         self.assertTrue(caps[0].released)
         self.assertIsNone(self.pipeline.camera_error)
@@ -342,21 +345,21 @@ class CameraTest(PipelineTestCase):
 
 
     def test_a_camera_change_clears_the_previous_cameras_violations(self):
-        for _ in range(execute.VIOLATION_MIN_FRAMES):
+        for _ in range(video.VIOLATION_MIN_FRAMES):
             self.process(NO_HELMET)
         self.assertTrue(self.pipeline.violation_confirmed)
         # Cambio de cámara con el bucle real: la ventana de infracciones de la anterior no debe sobrevivir
         # La cámara nueva da un solo fotograma tras la prueba de conexión (y luego falla durante
         # FRAME_FAIL_TIMEOUT), para que la ventana que se comprueba sea la del primer fotograma
-        with mock.patch.object(execute, "_open_capture", return_value=FakeCapture(frames=2)):
-            self.assertTrue(self.pipeline.set_camera(execute.CameraSource(**self.LOCAL_1)))
+        with mock.patch.object(cameras, "open_capture", return_value=FakeCapture(frames=2)):
+            self.assertTrue(self.pipeline.set_camera(cameras.CameraSource(**self.LOCAL_1)))
         self.model.detections = HELMET
         self.pipeline.thread.start()
         self.addCleanup(self.pipeline.stop)
         for _ in range(150):  # Hasta 3 s a que el bucle procese un fotograma de la cámara nueva
             if self.pipeline.items["helmet"]["ok"] == 1:
                 break
-            execute.time.sleep(0.02)
+            video.time.sleep(0.02)
         self.assertEqual(self.pipeline.items["helmet"]["ok"], 1)
         self.assertFalse(self.pipeline.violation_confirmed)
         self.assertEqual(sum(self.pipeline._recent_violations), 0)
@@ -371,7 +374,7 @@ class MaskUrlTest(unittest.TestCase):
         }
         for url, masked in cases.items():
             with self.subTest(url=url):
-                self.assertEqual(execute.mask_url(url), masked)
+                self.assertEqual(cameras.mask_url(url), masked)
 
 
 class ImportTest(unittest.TestCase):
