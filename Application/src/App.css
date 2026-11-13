@@ -501,23 +501,24 @@ input:checked + .slider-switch:before {
   border-color: var(--accent);
 }
 
-.modal-overlay {
-  position: fixed;
-  inset: 0;
+dialog::backdrop {
   background-color: rgba(0, 0, 0, 0.85);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
 }
 
 .modal-content {
-  position: relative;
   background-color: var(--bg-card);
-  padding: 1rem;
+  color: var(--text-main);
+  border: none;
+  padding: 0;
+  margin: auto; /* el reinicio global de márgenes quita el centrado propio de <dialog> */
   border-radius: 8px;
   max-width: 90vw;
   max-height: 90vh;
+}
+
+.modal-body {
+  position: relative;
+  padding: 1rem;
 }
 
 .modal-content img {
@@ -539,10 +540,6 @@ input:checked + .slider-switch:before {
   border: none;
   cursor: pointer;
   color: var(--text-muted);
-}
-
-.modal-content:focus {
-  outline: none;
 }
 
 .modal-close:focus-visible {
