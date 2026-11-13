@@ -4,7 +4,6 @@ Orden de preferencia (siempre en la GPU NVIDIA):
   1. best.engine (TensorRT). Si no existe, o no se puede cargar (otra GPU, otra versión de
      TensorRT...), se genera automáticamente a partir de best.pt (tarda aproximadamente un minuto).
   2. best.pt (PyTorch en FP16), si TensorRT no está instalado o la generación falla.
-  3. best.onnx, solo si ONNX Runtime tiene el proveedor CUDA.
 """
 import hashlib
 import importlib.util
@@ -56,14 +55,6 @@ def precision_kwargs(half: bool) -> dict:
 
 def _tensorrt_available() -> bool:
     return importlib.util.find_spec("tensorrt") is not None
-
-
-def _onnx_has_cuda() -> bool:
-    try:
-        import onnxruntime as ort
-        return "CUDAExecutionProvider" in ort.get_available_providers()
-    except Exception:
-        return False
 
 
 def _weights_digest(path: str) -> str:
@@ -156,16 +147,9 @@ def _load(path: str):
     return model
 
 
-def load_model(base_dir: str, build: bool = True):
-    """Devuelve (modelo, Runtime) con el mejor formato disponible para la GPU.
-
-    build=False no genera nunca el motor en este proceso (congelaría el vídeo de un servidor en marcha): si
-    falta, es antiguo o no se puede cargar, se usa best.pt.
-    """
-    require_cuda()
-    engine, pt, onnx = (os.path.join(base_dir, f"best.{ext}") for ext in ("engine", "pt", "onnx"))
-
-    use_engine = True
+def _engine_ready(base_dir: str, build: bool) -> bool:
+    """Decide si se puede usar best.engine: lo genera si falta (y build lo permite) y no admite uno antiguo."""
+    engine = os.path.join(base_dir, "best.engine")
     if not os.path.exists(engine):
         if build:
             build_engine(base_dir)
@@ -173,26 +157,41 @@ def load_model(base_dir: str, build: bool = True):
         logger.warning("best.engine no se generó a partir del best.pt actual")
         if not (build and build_engine(base_dir)):
             logger.warning("No se regeneró el motor; se usa best.pt para no ejecutar el modelo anterior")
-            use_engine = False
+            return False
+    return os.path.exists(engine)
 
-    if use_engine and os.path.exists(engine):
+
+def _load_engine(base_dir: str, build: bool):
+    """Carga best.engine y, si no carga y build lo permite, lo regenera una vez. Devuelve (modelo, Runtime) o None."""
+    engine = os.path.join(base_dir, "best.engine")
+    try:
+        return _load(engine), Runtime(engine, "cuda", False)
+    except Exception as e:
+        logger.warning("El motor TensorRT no se pudo cargar (¿otra GPU o versión de TensorRT?): %s", e)
+    if build and build_engine(base_dir):
         try:
             return _load(engine), Runtime(engine, "cuda", False)
-        except Exception as e:
-            logger.warning("El motor TensorRT no se pudo cargar (¿otra GPU o versión de TensorRT?): %s", e)
-            if build and build_engine(base_dir):
-                try:
-                    return _load(engine), Runtime(engine, "cuda", False)
-                except Exception as e2:
-                    logger.warning("El motor regenerado tampoco se pudo cargar: %s", e2)
+        except Exception as e2:
+            logger.warning("El motor regenerado tampoco se pudo cargar: %s", e2)
+    return None
 
+
+def load_model(base_dir: str, build: bool = True):
+    """Devuelve (modelo, Runtime) con el mejor formato disponible para la GPU.
+
+    build=False no genera nunca el motor en este proceso (congelaría el vídeo de un servidor en marcha): si
+    falta, es antiguo o no se puede cargar, se usa best.pt.
+    """
+    require_cuda()
+    if _engine_ready(base_dir, build):
+        loaded = _load_engine(base_dir, build)
+        if loaded:
+            return loaded
+
+    pt = os.path.join(base_dir, "best.pt")
     if os.path.exists(pt):
         logger.info("Usando best.pt en la GPU (FP16).")
         return _load(pt), Runtime(pt, "cuda", True)
-
-    if os.path.exists(onnx) and _onnx_has_cuda():
-        logger.info("Usando best.onnx en la GPU (ONNX Runtime CUDA).")
-        return _load(onnx), Runtime(onnx, "cuda", False)
 
     raise FileNotFoundError(
         f"No hay pesos utilizables en {base_dir}: se necesita best.pt (o best.engine) y una GPU con CUDA."
