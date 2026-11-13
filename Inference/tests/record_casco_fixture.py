@@ -60,11 +60,8 @@ def main():
         coords, confs = boxes.xyxy.int().tolist(), boxes.conf.tolist()
         names = [model.names[c] for c in boxes.cls.int().tolist()]
         result = counting.count(profile, names, confs, coords)
-        # También sin coordenadas: count() admite boxes=None y entonces cuenta solo el nivel más detallado
-        result_nb = counting.count(profile, names, confs)
         frames.append({"names": names, "confs": confs, "boxes": coords,
-                       "counts": _legacy(result), "highest": result.highest_violation, "flags": result.flags,
-                       "counts_no_boxes": _legacy(result_nb), "flags_no_boxes": result_nb.flags})
+                       "counts": _legacy(result), "highest": result.highest_violation, "flags": result.flags})
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
