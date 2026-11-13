@@ -10,7 +10,7 @@ niveles a ninguna clase (por ejemplo, un modelo Helmet / NoHelmet / Vest / NoVes
 salvo cuando el modelo se contradice: si marca el mismo sitio como "lleva" y como "falta" el mismo elemento (la
 supresión de no máximos es por clase y no lo evita), solo cuenta el recuadro con más confianza.
 """
-from typing import Dict, List, NamedTuple, Optional, Sequence
+from typing import Dict, List, NamedTuple, Sequence
 
 from profiles import Profile
 
@@ -42,54 +42,67 @@ DUPLICATE_IOU = 0.5  # Dos recuadros de persona que se solapan más que esto son
 HEAD_ZONE = 0.4
 
 
-def counted_flags(profile: Profile, class_names: Sequence[str],
-                  boxes: Optional[Sequence[Box]] = None, confs: Optional[Sequence[float]] = None) -> List[bool]:
-    """Indica, para cada recuadro del frame, si cuenta en los contadores (un recuadro por operario).
+def _head_zone_persons(boxes: Sequence[Box], persons: List[int], head: int) -> List[int]:
+    """Personas cuya zona alta (HEAD_ZONE) contiene el centro de la cabeza `head`."""
+    head_cy = (boxes[head][1] + boxes[head][3]) / 2
+    return [i for i in persons if _contains(boxes[i], boxes[head])
+            and head_cy <= boxes[i][1] + HEAD_ZONE * (boxes[i][3] - boxes[i][1])]
 
-    Con las coordenadas (`boxes`), cada operario se identifica por su posición: cuentan todas las cabezas y
-    las personas a las que no representa ninguna cabeza, salvo que se solapen con otra persona ya representada
-    (el modelo a veces marca dos veces a la misma persona). Sin coordenadas se cuenta solo el nivel más
-    detallado presente.
-    """
-    rules = [profile.rule(n) for n in class_names]
-    levels = [r.level for r in rules]
-    # La jerarquía la decide el perfil, no el frame: un casco suelto no es un operario aunque sea lo único visible
-    hierarchy = any(r.level is not None for r in profile.classes.values())
-    frame_level = min((lvl for lvl in levels if lvl is not None), default=None)
-    # Una cabeza representa a las personas que la contienen. Si son varias (operarios solapados), representa
-    # siempre a la del borde superior más cercano; a las demás solo si dicen lo mismo que ella (el modelo ha
-    # marcado dos veces al mismo operario). Una persona sin casco no desaparece por la cabeza con casco de otra.
+
+def _represented_persons(rules, boxes: Sequence[Box]) -> set:
+    """Índices de las personas a las que representa alguna cabeza (su operario ya cuenta por la cabeza)."""
+    # Una cabeza representa a la persona del borde superior más cercano; a las demás que la contienen solo si
+    # dicen lo mismo que ella (el modelo ha marcado dos veces al mismo operario). Una persona sin casco no
+    # desaparece por la cabeza con casco de otra.
+    persons = [i for i, r in enumerate(rules) if r.level == 1]
     represented = set()
-    if boxes is not None:
-        persons = [i for i, lvl in enumerate(levels) if lvl == 1]
-        for h in (j for j, lvl in enumerate(levels) if lvl == 0):
-            head_cy = (boxes[h][1] + boxes[h][3]) / 2
-            inside = [i for i in persons if _contains(boxes[i], boxes[h])
-                      and head_cy <= boxes[i][1] + HEAD_ZONE * (boxes[i][3] - boxes[i][1])]
-            if inside:
-                owner = min(inside, key=lambda i: _head_distance(boxes[i], boxes[h]))
-                represented.update(i for i in inside if i == owner or rules[i].state == rules[h].state)
+    for head in (j for j, r in enumerate(rules) if r.level == 0):
+        inside = _head_zone_persons(boxes, persons, head)
+        if not inside:
+            continue
+        owner = min(inside, key=lambda i: _head_distance(boxes[i], boxes[head]))
+        represented.update(i for i in inside if i == owner or rules[i].state == rules[head].state)
+    return represented
+
+
+def _claim_person(i: int, boxes: Sequence[Box], represented: set, claimed: List[Box]) -> bool:
+    """True si la persona `i` es un operario nuevo (y lo reclama); False si ya la representa otro recuadro."""
+    if i in represented or any(_iou(boxes[i], c) > DUPLICATE_IOU for c in claimed):
+        return False
+    claimed.append(boxes[i])
+    return True
+
+
+def _flags_with_levels(rules, boxes: Sequence[Box]) -> List[bool]:
+    """Perfil con niveles: cuentan las cabezas y las personas que no representa ninguna cabeza ni otra persona."""
+    represented = _represented_persons(rules, boxes)
     claimed = [boxes[i] for i in sorted(represented)]  # Personas ya representadas o ya contadas
     flags = []
-    for i, (rule, lvl) in enumerate(zip(rules, levels)):
+    for i, rule in enumerate(rules):
         if rule.state in ("neutral", "ignore"):
-            flags.append(rule.state == "neutral")              # neutral se muestra; ignore no
-        elif not hierarchy:
-            flags.append(True)                                 # sin jerarquía: cada recuadro
-        elif lvl == 0:
-            flags.append(True)                                 # cada cabeza es un operario
-        elif lvl == 1:
-            if boxes is None:
-                flags.append(frame_level == 1)
-            elif i in represented or any(_iou(boxes[i], c) > DUPLICATE_IOU for c in claimed):
-                flags.append(False)                            # ya la representa su cabeza u otra persona
-            else:
-                flags.append(True)
-                claimed.append(boxes[i])
+            flags.append(rule.state == "neutral")      # neutral se muestra; ignore no
+        elif rule.level == 1:
+            flags.append(_claim_person(i, boxes, represented, claimed))
         else:
-            flags.append(False)                                # casco suelto: ya cuenta su cabeza
-    if not hierarchy and boxes is not None and confs is not None:
-        _drop_contradictions(rules, boxes, confs, flags)
+            flags.append(rule.level == 0)              # cada cabeza es un operario; el casco suelto, no
+    return flags
+
+
+def counted_flags(profile: Profile, class_names: Sequence[str],
+                  boxes: Sequence[Box], confs: Sequence[float]) -> List[bool]:
+    """Indica, para cada recuadro del frame, si cuenta en los contadores (un recuadro por operario).
+
+    Cada operario se identifica por su posición. Con niveles en el perfil cuentan todas las cabezas y las
+    personas a las que no representa ninguna cabeza, salvo que se solapen con otra persona ya representada
+    (el modelo a veces marca dos veces a la misma persona). Sin niveles cuenta cada recuadro no neutral
+    ni ignorado, salvo las contradicciones.
+    """
+    rules = [profile.rule(n) for n in class_names]
+    # La jerarquía la decide el perfil, no el frame: un casco suelto no es un operario aunque sea lo único visible
+    if any(r.level is not None for r in profile.classes.values()):
+        return _flags_with_levels(rules, boxes)
+    flags = [r.state != "ignore" for r in rules]  # cada recuadro cuenta; el neutral se muestra
+    _drop_contradictions(rules, boxes, confs, flags)
     return flags
 
 
@@ -130,7 +143,7 @@ def empty_items(profile: Profile) -> Dict[str, Dict[str, int]]:
 
 
 def count(profile: Profile, class_names: Sequence[str], confs: Sequence[float],
-          boxes: Optional[Sequence[Box]] = None) -> Counts:
+          boxes: Sequence[Box]) -> Counts:
     """Cuenta los elementos llevados y los que faltan, los recuadros neutrales y la confianza de la infracción."""
     items = empty_items(profile)
     neutral = 0

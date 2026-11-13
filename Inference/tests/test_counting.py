@@ -24,6 +24,11 @@ VEST_PROFILE = {
 }
 
 
+def apart(n):
+    """n recuadros que no se solapan entre sí."""
+    return [[20 * i, 0, 20 * i + 10, 10] for i in range(n)]
+
+
 class CascoRegressionTest(unittest.TestCase):
     """El perfil casco cuenta exactamente igual que counting.py antes de los perfiles (fixture grabado)."""
 
@@ -36,24 +41,18 @@ class CascoRegressionTest(unittest.TestCase):
     def test_profile_describes_every_model_class(self):
         profiles.check_model(self.profile, dict(enumerate(self.fixture["model_names"])))
 
-    def _check(self, frame, result, counts_key, flags_key):
-        old = frame[counts_key]
+    def _check(self, frame, result):
+        old = frame["counts"]
         self.assertEqual(result.items, {"helmet": {"ok": old["helmet"], "missing": old["no_helmet"]}})
         self.assertEqual(result.neutral, old["face"])
-        self.assertEqual(result.flags, frame[flags_key])
+        self.assertEqual(result.flags, frame["flags"])
 
     def test_counts_with_boxes(self):
         for i, frame in enumerate(self.fixture["frames"]):
             with self.subTest(frame=i):
                 result = counting.count(self.profile, frame["names"], frame["confs"], frame["boxes"])
-                self._check(frame, result, "counts", "flags")
+                self._check(frame, result)
                 self.assertEqual(result.highest_violation, frame["highest"])
-
-    def test_counts_without_boxes(self):
-        for i, frame in enumerate(self.fixture["frames"]):
-            with self.subTest(frame=i):
-                result = counting.count(self.profile, frame["names"], frame["confs"])
-                self._check(frame, result, "counts_no_boxes", "flags_no_boxes")
 
 
 class CascoHierarchyTest(unittest.TestCase):
@@ -61,11 +60,9 @@ class CascoHierarchyTest(unittest.TestCase):
         self.profile = profiles.load("casco")
 
     def test_loose_helmet_is_not_a_worker(self):
-        for boxes in ([[10, 10, 50, 50]], None):
-            with self.subTest(boxes=boxes):
-                result = counting.count(self.profile, ["helmet"], [0.9], boxes)
-                self.assertEqual(result.items, {"helmet": {"ok": 0, "missing": 0}})
-                self.assertEqual(result.flags, [False])
+        result = counting.count(self.profile, ["helmet"], [0.9], [[10, 10, 50, 50]])
+        self.assertEqual(result.items, {"helmet": {"ok": 0, "missing": 0}})
+        self.assertEqual(result.flags, [False])
 
     def test_overlapping_worker_keeps_their_violation(self):
         # La cabeza con casco de A cae también dentro del recuadro de B (sin casco, sin cabeza detectada)
@@ -101,7 +98,7 @@ class VestProfileTest(unittest.TestCase):
 
     def test_every_box_counts_without_hierarchy(self):
         names = ["Helmet", "Helmet", "Vest", "NoHelmet", "NoVest"]
-        result = counting.count(self.profile, names, [0.5, 0.6, 0.7, 0.4, 0.8])
+        result = counting.count(self.profile, names, [0.5, 0.6, 0.7, 0.4, 0.8], apart(5))
         self.assertEqual(result.items, {"helmet": {"ok": 2, "missing": 1}, "vest": {"ok": 1, "missing": 1}})
         self.assertEqual(result.safety_score, 60)
         self.assertEqual(result.highest_violation, 0.8)
@@ -143,7 +140,7 @@ class VestProfileTest(unittest.TestCase):
 class NeutralOnlyTest(unittest.TestCase):
     def test_neutral_and_ignored_classes(self):
         casco = profiles.load("casco")
-        result = counting.count(casco, ["face", "person", "face"], [0.9, 0.9, 0.8])
+        result = counting.count(casco, ["face", "person", "face"], [0.9, 0.9, 0.8], apart(3))
         self.assertEqual(result.neutral, 2)
         self.assertEqual(result.flags, [True, False, True])
         self.assertEqual((result.violations, result.safety_score), (0, 100))
