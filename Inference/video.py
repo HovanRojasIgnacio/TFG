@@ -148,6 +148,7 @@ class VideoPipeline:
         evidence.purge_old_snapshots()
         # Las infracciones de ejecuciones anteriores siguen en el panel
         self.infractions_log.extend(evidence.load_log())
+        self._undeleted = set()  # Capturas que salieron del registro y no se pudieron borrar: se reintenta
         self._last_purge = time.time()
         self._last_error_log = 0.0
         self._failing_since = None  # Inicio de una racha de fallos al procesar frames
@@ -228,6 +229,7 @@ class VideoPipeline:
     def _purge_log(self):
         """Borra las capturas caducadas y quita del registro las entradas cuya imagen ya no existe."""
         self._last_purge = time.time()
+        self._retry_undeleted()
         try:
             removed = evidence.purge_old_snapshots()
         except OSError as e:
@@ -239,6 +241,18 @@ class VideoPipeline:
                 (item for item in self.infractions_log if os.path.basename(item["image_path"]) not in removed),
                 maxlen=self.infractions_log.maxlen)
             evidence.save_log(self.infractions_log)
+
+    def _retry_undeleted(self):
+        """Reintenta borrar las capturas que salieron del registro y seguían abiertas en otro programa."""
+        for name in list(self._undeleted):
+            try:
+                os.remove(os.path.join(evidence.infractions_dir, name))
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.debug("La captura %s sigue sin poder borrarse: %s", name, e)
+                continue
+            self._undeleted.discard(name)
 
     def _on_processing_error(self, frame):
         """Tras un fallo al procesar un frame, el panel no debe seguir mostrando el último resultado bueno.
@@ -395,6 +409,7 @@ class VideoPipeline:
                 os.remove(os.path.join(evidence.infractions_dir, evicted))
             except OSError as e:
                 logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
+                self._undeleted.add(evicted)
 
         self.infractions_log.append({
             "id": int(current_time * 1000),

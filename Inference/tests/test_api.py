@@ -146,6 +146,65 @@ class InfractionLogTest(PipelineTestCase):
                 self.assertEqual(len(self.new_pipeline().infractions_log), 0)
 
 
+class UndeletedSnapshotTest(PipelineTestCase):
+    """La captura que sale del registro y no se puede borrar se reintenta; nada más se borra por su cuenta."""
+
+    def fill_log_with_a_failed_eviction(self):
+        """Llena un registro de 2 entradas y registra una tercera mientras falla el borrado de la más antigua."""
+        with mock.patch.object(evidence, "LOG_SIZE", 2):
+            self.pipeline = self.new_pipeline()
+        for _ in range(2):
+            self.now += 5  # Más que el intervalo mínimo entre capturas
+            self.record_one_more()
+        self.now += 5
+        with mock.patch.object(video.os, "remove", side_effect=PermissionError("en uso")):
+            self.record_one_more()
+        self.assertEqual(len(self.snapshots()), 3)  # La más antigua sigue en el disco sin entrada en el registro
+        self.assertEqual(len(self.pipeline.infractions_log), 2)
+
+    def listed(self):
+        return {os.path.basename(e["image_path"]) for e in self.pipeline.infractions_log}
+
+    def test_an_image_whose_eviction_failed_is_removed_at_the_next_cleanup(self):
+        self.fill_log_with_a_failed_eviction()
+        self.pipeline._purge_log()
+        self.assertEqual(set(self.snapshots()), self.listed())
+        self.assertEqual(len(self.snapshots()), 2)
+        self.assertEqual(self.pipeline._undeleted, set())
+
+    def test_a_file_that_still_cannot_be_deleted_is_kept_for_the_next_cleanup(self):
+        self.fill_log_with_a_failed_eviction()
+        with mock.patch.object(video.os, "remove", side_effect=PermissionError("en uso")):
+            self.pipeline._purge_log()
+        self.assertEqual(len(self.snapshots()), 3)
+        self.assertEqual(len(self.pipeline._undeleted), 1)
+        self.assertTrue(self.pipeline._undeleted.isdisjoint(self.listed()))
+        self.pipeline._purge_log()
+        self.assertEqual(set(self.snapshots()), self.listed())
+        self.assertEqual(self.pipeline._undeleted, set())
+
+    def test_the_cleanup_never_deletes_snapshots_it_did_not_evict(self):
+        extra = [os.path.join(self.tmp.name, name) for name in ("inf_1_deadbeefdeadbeef.jpg", "notas.txt")]
+        for path in extra:
+            with open(path, "wb") as f:
+                f.write(b"x")
+        self.record_one_more()
+        self.pipeline._purge_log()
+        for path in extra:
+            self.assertTrue(os.path.exists(path))
+        self.assertEqual(len(self.snapshots()), 2)  # La suya y la ajena
+        self.assertIn(os.path.basename(self.pipeline.infractions_log[0]["image_path"]), self.snapshots())
+
+    def record_one_more(self):
+        """Registra una infracción más (la primera llamada confirma la infracción con varios frames)."""
+        before = len(self.snapshots())
+        for _ in range(video.VIOLATION_MIN_FRAMES + 1):
+            self.process(NO_HELMET, seconds=0.01)
+            if len(self.snapshots()) > before:
+                return
+        self.fail("no se registró la infracción")
+
+
 class ApiTest(PipelineTestCase):
     def setUp(self):
         super().setUp()
