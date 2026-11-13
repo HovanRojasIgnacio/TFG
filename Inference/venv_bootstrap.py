@@ -31,3 +31,15 @@ def ensure_venv() -> None:
             "Python actual con GUARDWATCH_NO_VENV=1.")
     print(f"[GuardWatch] Usando el entorno virtual: {venv_python}", flush=True)
     raise SystemExit(subprocess.call([venv_python] + sys.argv, env=env))
+
+
+
+def setup(is_main: bool) -> None:
+    """Prepara el proceso antes de importar torch, numpy, OpenCV o ultralytics; is_main: se lanzó como script."""
+    # Evita el error de Windows "OpenMP runtime already initialized" cuando torch, numpy y OpenCV cargan cada uno
+    # su propia copia de libiomp (workaround habitual). Debe fijarse antes de importar cualquiera de ellos.
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    if is_main:
+        ensure_venv()  # Usa Inference/.venv (PyTorch con CUDA) aunque se lance con otro Python
+    # Ultralytics no debe instalar paquetes por su cuenta con pip (puede modificar el Python global)
+    os.environ.setdefault("YOLO_AUTOINSTALL", "False")

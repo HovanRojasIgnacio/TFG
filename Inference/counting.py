@@ -29,7 +29,7 @@ def _head_distance(person: Box, head: Box) -> float:
     return abs(cx - (person[0] + person[2]) / 2) + abs(cy - person[1])
 
 
-def _iou(a: Box, b: Box) -> float:
+def iou(a: Box, b: Box) -> float:
     x1, y1, x2, y2 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
     inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
     union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
@@ -67,7 +67,7 @@ def _represented_persons(rules, boxes: Sequence[Box]) -> set:
 
 def _claim_person(i: int, boxes: Sequence[Box], represented: set, claimed: List[Box]) -> bool:
     """True si la persona `i` es un operario nuevo (y lo reclama); False si ya la representa otro recuadro."""
-    if i in represented or any(_iou(boxes[i], c) > DUPLICATE_IOU for c in claimed):
+    if i in represented or any(iou(boxes[i], c) > DUPLICATE_IOU for c in claimed):
         return False
     claimed.append(boxes[i])
     return True
@@ -116,7 +116,7 @@ def _drop_contradictions(rules, boxes: Sequence[Box], confs: Sequence[float], fl
         for j in range(len(rules)):
             if j != i and flags[j] and confs[j] <= confs[i] and rules[i].item is not None \
                     and rules[i].item == rules[j].item and rules[i].state != rules[j].state \
-                    and _iou(boxes[i], boxes[j]) > DUPLICATE_IOU:
+                    and iou(boxes[i], boxes[j]) > DUPLICATE_IOU:
                 flags[j] = False
 
 

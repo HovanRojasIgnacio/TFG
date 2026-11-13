@@ -18,11 +18,7 @@ import argparse
 import glob
 import os
 import venv_bootstrap
-if __name__ == "__main__":
-    venv_bootstrap.ensure_venv()  # Usa Inference/.venv (PyTorch con CUDA y TensorRT) aunque se lance con otro Python
-# Ultralytics no debe instalar paquetes por su cuenta con pip (puede modificar el Python global)
-os.environ.setdefault("YOLO_AUTOINSTALL", "False")
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+venv_bootstrap.setup(__name__ == "__main__")
 
 from ultralytics import YOLO
 
@@ -79,13 +75,6 @@ def _predict(model, path, conf, **kw):
     return [(model.names[int(b.cls[0])], float(b.conf[0]), b.xyxy[0].tolist()) for b in r.boxes]
 
 
-def _iou(a, b):
-    x1, y1, x2, y2 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
-    inter = max(0, x2 - x1) * max(0, y2 - y1)
-    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return inter / union if union else 0
-
-
 def _is_violation(profile, dets):
     # Misma regla que execute.py: cada operario cuenta una vez (véase counting.py)
     counts = counting.count(profile, [c for c, _, _ in dets], [conf for _, conf, _ in dets],
@@ -112,7 +101,7 @@ def report_agreement(profile, pt_model, engine_model, folder):
             for i, (c2, conf2, box2) in enumerate(out):
                 if i in used or c2 != cls:
                     continue
-                v = _iou(box, box2)
+                v = counting.iou(box, box2)
                 if v >= 0.5 and (best is None or v > best[0]):
                     best = (v, i, conf2)
             if best:
