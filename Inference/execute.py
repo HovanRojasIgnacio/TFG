@@ -268,6 +268,32 @@ def mask_url(url: Optional[str]) -> Optional[str]:
         return "URL no válida"
 
 
+def _camera_entry(index: int, width: int, height: int) -> Dict:
+    """Ficha de una cámara local para la lista que ve el panel."""
+    return {"index": index, "name": f"Cámara Local {index}", "type": "local", "width": width, "height": height}
+
+
+def _probe_local_camera(index: int) -> Optional[Dict]:
+    """Abre la cámara local `index` y devuelve su ficha, o None si no está disponible."""
+    cap = None
+    try:
+        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            return None
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        return _camera_entry(index, width if width > 0 else 640, height if height > 0 else 480)
+    except Exception as e:
+        logger.warning("Error al detectar la cámara %s: %s", index, e)
+        return None
+    finally:
+        if cap:
+            try:
+                cap.release()
+            except Exception:
+                pass
+
+
 def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
                          skip_index: Optional[int] = None) -> List[Dict]:
     """Detecta las cámaras locales disponibles, con caché.
@@ -285,45 +311,15 @@ def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
         cameras = []
         consecutive_failures = 0
         for i in range(max_cameras):
-            if i == skip_index:
-                cameras.append({
-                    "index": i,
-                    "name": f"Cámara Local {i}",
-                    "type": "local",
-                    "width": 640,
-                    "height": 480
-                })
+            camera = _camera_entry(i, 640, 480) if i == skip_index else _probe_local_camera(i)
+            if camera:
+                cameras.append(camera)
                 consecutive_failures = 0
-                continue
-            cap = None
-            try:
-                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
-                if cap.isOpened():
-                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    cameras.append({
-                        "index": i,
-                        "name": f"Cámara Local {i}",
-                        "type": "local",
-                        "width": width if width > 0 else 640,
-                        "height": height if height > 0 else 480
-                    })
-                    consecutive_failures = 0
-                else:
-                    consecutive_failures += 1
-            except Exception as e:
-                logger.warning("Error al detectar la cámara %s: %s", i, e)
+            else:
                 consecutive_failures += 1
-            finally:
-                if cap:
-                    try:
-                        cap.release()
-                    except Exception:
-                        pass
-            
             if consecutive_failures >= 2:
                 break
-        
+
         _camera_cache = {"cameras": cameras, "last_update": now}
         return cameras
 
@@ -497,6 +493,12 @@ class VideoPipeline:
         self._last_purge = time.time()
         self._last_error_log = 0.0
         self._failing_since = None  # Inicio de una racha de fallos al procesar frames
+        # Estado del bucle de vídeo: _process_stream les da su valor real al arrancar el hilo
+        self._current_source: Optional[CameraSource] = None
+        self._next_retry = 0.0
+        self._retry_delay = RECONNECT_MIN_DELAY
+        self._last_frame_time = 0.0
+        self._prev_time = 0.0
 
         self.thread = threading.Thread(target=self._process_stream, daemon=True)
         if start:
@@ -689,13 +691,7 @@ class VideoPipeline:
         counts = counting.count(detector.profile, names, confs, coords)
 
         # Solo se dibujan los recuadros que cuentan, para que la imagen coincida con los contadores
-        for (x1, y1, x2, y2), conf, name, counted in zip(coords, confs, names, counts.flags):
-            if not counted:
-                continue
-            color, text = detector.styles[name]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(frame, f"{text} ({conf:.2f})", (x1, max(y1 - 10, 20)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        self._draw_boxes(frame, detector, coords, confs, names, counts.flags)
 
         # Si se cambió de modo durante este frame, sus contadores ya no corresponden al modo actual
         current_mode = detector is self.detector
@@ -708,34 +704,53 @@ class VideoPipeline:
         # Registro de infracciones: solo las confirmadas, y con un frame en el que la infracción se ve
         if current_mode and self.violation_confirmed and counts.violations > 0 and \
                 (current_time - self.last_infraction_save) > self.save_cooldown:
-            # /static no tiene autenticación: el sufijo aleatorio impide adivinar la dirección de una captura
-            filename = f"inf_{int(current_time)}_{secrets.token_hex(8)}.jpg"
-            filepath = os.path.join(infractions_dir, filename)
-            self.last_infraction_save = current_time
-            if not cv2.imwrite(filepath, frame):
-                # Disco lleno o carpeta sin permisos: sin imagen no se registra una entrada con la evidencia rota
-                logger.error("No se pudo guardar la captura de la infracción en %s", filepath)
-            else:
-                # El registro guarda las últimas 100; la imagen de la que sale se borra del disco
-                if len(self.infractions_log) == self.infractions_log.maxlen:
-                    evicted = os.path.basename(self.infractions_log[0]["image_path"])
-                    try:
-                        os.remove(os.path.join(infractions_dir, evicted))
-                    except OSError as e:
-                        logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
+            self._record_infraction(frame, detector, counts, current_time)
 
-                self.infractions_log.append({
-                    "id": int(current_time * 1000),
-                    "date": time.strftime("%Y-%m-%d", time.localtime(current_time)),
-                    "timestamp": time.strftime("%H:%M:%S", time.localtime(current_time)),
-                    "confidence": round(counts.highest_violation, 2),
-                    "image_path": f"/static/infractions/{filename}",
-                    "profile": detector.profile.name,
-                    "details": missing_details(detector.profile, counts.items),
-                })
-                save_log(self.infractions_log)
+        self._publish_frame(frame)
+        self.latency_window.append((time.perf_counter() - frame_start) * 1000)
 
-        # El JPEG solo se codifica si alguien está viendo el stream (ahorra CPU)
+    @staticmethod
+    def _draw_boxes(frame, detector: Detector, coords, confs, names, flags):
+        """Dibuja sobre el frame solo los recuadros que cuentan, para que la imagen coincida con los contadores."""
+        for (x1, y1, x2, y2), conf, name, counted in zip(coords, confs, names, flags):
+            if not counted:
+                continue
+            color, text = detector.styles[name]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, f"{text} ({conf:.2f})", (x1, max(y1 - 10, 20)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    def _record_infraction(self, frame, detector: Detector, counts, current_time: float):
+        """Guarda la captura de la infracción y la añade al registro (si está lleno, borra la más antigua)."""
+        # /static no tiene autenticación: el sufijo aleatorio impide adivinar la dirección de una captura
+        filename = f"inf_{int(current_time)}_{secrets.token_hex(8)}.jpg"
+        filepath = os.path.join(infractions_dir, filename)
+        self.last_infraction_save = current_time
+        if not cv2.imwrite(filepath, frame):
+            # Disco lleno o carpeta sin permisos: sin imagen no se registra una entrada con la evidencia rota
+            logger.error("No se pudo guardar la captura de la infracción en %s", filepath)
+            return
+        # El registro guarda las últimas 100; la imagen de la que sale se borra del disco
+        if len(self.infractions_log) == self.infractions_log.maxlen:
+            evicted = os.path.basename(self.infractions_log[0]["image_path"])
+            try:
+                os.remove(os.path.join(infractions_dir, evicted))
+            except OSError as e:
+                logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
+
+        self.infractions_log.append({
+            "id": int(current_time * 1000),
+            "date": time.strftime("%Y-%m-%d", time.localtime(current_time)),
+            "timestamp": time.strftime("%H:%M:%S", time.localtime(current_time)),
+            "confidence": round(counts.highest_violation, 2),
+            "image_path": f"/static/infractions/{filename}",
+            "profile": detector.profile.name,
+            "details": missing_details(detector.profile, counts.items),
+        })
+        save_log(self.infractions_log)
+
+    def _publish_frame(self, frame):
+        """Codifica el JPEG para el stream, solo si alguien lo está viendo (ahorra CPU)."""
         if time.time() - self.last_viewer_time < VIEWER_TIMEOUT:
             ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if ret:
@@ -746,121 +761,140 @@ class VideoPipeline:
             with self.lock:
                 self.latest_encoded_frame = None  # Evita mostrar un frame antiguo al reconectar
 
-        self.latency_window.append((time.perf_counter() - frame_start) * 1000)
+    def _take_camera_request(self):
+        """Recoge el cambio de cámara o la petición de reconectar que haya dejado set_camera."""
+        # La cámara nueva se abre fuera del lock: abrir una cámara IP puede tardar segundos y el lock no
+        # debe bloquear a set_camera
+        with self._camera_lock:
+            requested = self.camera_source
+            handover, self._handover = self._handover, None
+            retry_now, self._retry_requested = self._retry_requested, False
+        if retry_now:
+            self._next_retry = 0.0
+            self._retry_delay = RECONNECT_MIN_DELAY
+        if requested != self._current_source:
+            self._current_source = requested
+            self._release_cap()
+            self._clear_detections()  # Los contadores y la ventana de infracciones eran de la cámara anterior
+            self._next_retry = 0.0
+            self._retry_delay = RECONNECT_MIN_DELAY
+        if handover is not None:
+            source, cap = handover
+            if source is self._current_source:
+                self._clear_detections()  # Nada de la cámara anterior debe confirmar una infracción de esta
+                self._cap = LatestFrameReader(cap) if source.type == "ip" else cap
+                self.camera_error = None
+                logger.info("Cámara conectada: %s", _source_label(source))
+                self._last_frame_time = time.time()
+                self._prev_time = time.time()
+            else:
+                cap.release()
+
+    def _reconnect(self):
+        """Sin cámara abierta (arranque, cambio, fallo o desconexión): reintento con espera creciente."""
+        source = self._current_source
+        self._clear_detections()
+        if time.time() >= self._next_retry:
+            cap = _open_capture(source)
+            if self.camera_source != source:
+                # Se cambió de cámara mientras se abría esta: se descarta
+                if cap:
+                    cap.release()
+                return
+            if cap and cap.isOpened():
+                self._cap = LatestFrameReader(cap) if source.type == "ip" else cap
+                self.camera_error = None
+                logger.info("Cámara conectada: %s", _source_label(source))
+                self._retry_delay = RECONNECT_MIN_DELAY
+                self._last_frame_time = time.time()
+                self._prev_time = time.time()
+                return
+            if cap:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            self.camera_error = f"No se pudo conectar a la cámara: {_source_label(source)}"
+            self._next_retry = time.time() + self._retry_delay
+            logger.warning("Cámara no disponible, se reintenta en %.0fs", self._retry_delay)
+            self._retry_delay = min(self._retry_delay * 2, RECONNECT_MAX_DELAY)
+        time.sleep(0.5)
+
+    def _read_frame(self):
+        """Lee un frame de la cámara. Devuelve None si falla (y la libera si lleva un tiempo sin dar frames)."""
+        try:
+            success, frame = self._cap.read()
+        except Exception as e:
+            logger.error("Falló la lectura de la cámara: %s", e)
+            success = False
+            frame = None
+
+        if not success or frame is None:
+            # Por tiempo y no por número de fallos: en una cámara IP cada lectura fallida
+            # puede tardar hasta IP_READ_TIMEOUT_MS
+            fail_timeout = IP_FRAME_FAIL_TIMEOUT if self._current_source.type == "ip" else FRAME_FAIL_TIMEOUT
+            if time.time() - self._last_frame_time > fail_timeout:
+                logger.warning("Sin frames durante %.0fs, se libera la cámara", fail_timeout)
+                self._release_cap()
+                self.camera_error = "Error de lectura de cámara - cámara desconectada"
+                self._retry_delay = RECONNECT_MIN_DELAY
+                self._next_retry = time.time() + self._retry_delay  # Se reintenta automáticamente
+            else:
+                time.sleep(0.01)
+            return None
+        return frame
+
+    def _handle_frame(self, frame):
+        """Procesa un frame leído: mide el tiempo, lo analiza y, si falla, deja el error para el panel."""
+        source = self._current_source
+        self._last_frame_time = time.time()
+        frame_start = time.perf_counter()
+
+        current_time = time.time()
+        time_diff = current_time - self._prev_time
+        self._prev_time = current_time
+
+        try:
+            self._process_frame(frame, source, current_time, frame_start)
+        except Exception:
+            # Un error inesperado (CUDA, TensorRT, OpenCV...) no debe terminar el único hilo de proceso
+            if time.time() - self._last_error_log > 10:
+                logger.exception("Error al procesar un frame; se continúa con el siguiente")
+                self._last_error_log = time.time()
+            self._on_processing_error(cv2.flip(frame, 1) if source.type == "local" else frame)
+            time.sleep(0.1)
+        else:
+            self._after_good_frame(time_diff)
+
+    def _after_good_frame(self, time_diff: float):
+        """Actualiza los FPS y da por recuperado un error de procesamiento anterior."""
+        if time_diff > 0:
+            # Media móvil: con 1 / Δt de un solo frame la cifra del panel saltaba de un valor a otro
+            instant = 1.0 / time_diff
+            self.fps = instant if self.fps == 0 else FPS_SMOOTHING * instant + (1 - FPS_SMOOTHING) * self.fps
+        if self._failing_since is not None:  # El procesamiento se ha recuperado
+            self._failing_since = None
+            if self.camera_error == PROCESSING_ERROR:
+                self.camera_error = None
 
     def _process_stream(self):
-        prev_time = time.time()
-        current_source = self.camera_source
-        last_frame_time = time.time()
-        next_retry = 0.0
-        retry_delay = RECONNECT_MIN_DELAY
+        """Bucle del hilo de vídeo: atiende los cambios de cámara, reconecta si hace falta y procesa frames."""
+        self._prev_time = time.time()
+        self._current_source = self.camera_source
+        self._last_frame_time = time.time()
+        self._next_retry = 0.0
+        self._retry_delay = RECONNECT_MIN_DELAY
 
         while self.is_running:
             if time.time() - self._last_purge > PURGE_INTERVAL:
                 self._purge_log()
-            # Cambio de cámara pedido desde la API. La nueva se abre más abajo, fuera del lock:
-            # abrir una cámara IP puede tardar segundos y el lock no debe bloquear a set_camera
-            with self._camera_lock:
-                requested = self.camera_source
-                handover, self._handover = self._handover, None
-                retry_now, self._retry_requested = self._retry_requested, False
-            if retry_now:
-                next_retry = 0.0
-                retry_delay = RECONNECT_MIN_DELAY
-            if requested != current_source:
-                current_source = requested
-                self._release_cap()
-                self._clear_detections()  # Los contadores y la ventana de infracciones eran de la cámara anterior
-                next_retry = 0.0
-                retry_delay = RECONNECT_MIN_DELAY
-            if handover is not None:
-                source, cap = handover
-                if source is current_source:
-                    self._clear_detections()  # Nada de la cámara anterior debe confirmar una infracción de esta
-                    self._cap = LatestFrameReader(cap) if source.type == "ip" else cap
-                    self.camera_error = None
-                    logger.info("Cámara conectada: %s", _source_label(source))
-                    last_frame_time = time.time()
-                    prev_time = time.time()
-                else:
-                    cap.release()
-
+            self._take_camera_request()
             if not self._cap or not self._cap.isOpened():
-                # Sin cámara abierta (arranque, cambio, fallo o desconexión): reintento con espera creciente
-                self._clear_detections()
-                if time.time() >= next_retry:
-                    cap = _open_capture(current_source)
-                    if self.camera_source != current_source:
-                        # Se cambió de cámara mientras se abría esta: se descarta
-                        if cap:
-                            cap.release()
-                        continue
-                    if cap and cap.isOpened():
-                        self._cap = LatestFrameReader(cap) if current_source.type == "ip" else cap
-                        self.camera_error = None
-                        logger.info("Cámara conectada: %s", _source_label(current_source))
-                        retry_delay = RECONNECT_MIN_DELAY
-                        last_frame_time = time.time()
-                        prev_time = time.time()
-                        continue
-                    if cap:
-                        try:
-                            cap.release()
-                        except Exception:
-                            pass
-                    self.camera_error = f"No se pudo conectar a la cámara: {_source_label(current_source)}"
-                    next_retry = time.time() + retry_delay
-                    logger.warning("Cámara no disponible, se reintenta en %.0fs", retry_delay)
-                    retry_delay = min(retry_delay * 2, RECONNECT_MAX_DELAY)
-                time.sleep(0.5)
+                self._reconnect()
                 continue
-
-            try:
-                success, frame = self._cap.read()
-            except Exception as e:
-                logger.error("Falló la lectura de la cámara: %s", e)
-                success = False
-                frame = None
-            
-            if not success or frame is None:
-                # Por tiempo y no por número de fallos: en una cámara IP cada lectura fallida
-                # puede tardar hasta IP_READ_TIMEOUT_MS
-                fail_timeout = IP_FRAME_FAIL_TIMEOUT if current_source.type == "ip" else FRAME_FAIL_TIMEOUT
-                if time.time() - last_frame_time > fail_timeout:
-                    logger.warning("Sin frames durante %.0fs, se libera la cámara", fail_timeout)
-                    self._release_cap()
-                    self.camera_error = "Error de lectura de cámara - cámara desconectada"
-                    retry_delay = RECONNECT_MIN_DELAY
-                    next_retry = time.time() + retry_delay  # Se reintenta automáticamente
-                else:
-                    time.sleep(0.01)
-                continue
-
-            last_frame_time = time.time()
-            frame_start = time.perf_counter()
-
-            current_time = time.time()
-            time_diff = current_time - prev_time
-            prev_time = current_time
-
-            try:
-                self._process_frame(frame, current_source, current_time, frame_start)
-            except Exception:
-                # Un error inesperado (CUDA, TensorRT, OpenCV...) no debe terminar el único hilo de proceso
-                if time.time() - self._last_error_log > 10:
-                    logger.exception("Error al procesar un frame; se continúa con el siguiente")
-                    self._last_error_log = time.time()
-                self._on_processing_error(cv2.flip(frame, 1) if current_source.type == "local" else frame)
-                time.sleep(0.1)
-            else:
-                if time_diff > 0:
-                    # Media móvil: con 1 / Δt de un solo frame la cifra del panel saltaba de un valor a otro
-                    instant = 1.0 / time_diff
-                    self.fps = instant if self.fps == 0 else FPS_SMOOTHING * instant + (1 - FPS_SMOOTHING) * self.fps
-                if self._failing_since is not None:  # El procesamiento se ha recuperado
-                    self._failing_since = None
-                    if self.camera_error == PROCESSING_ERROR:
-                        self.camera_error = None
+            frame = self._read_frame()
+            if frame is not None:
+                self._handle_frame(frame)
 
         if self._cap:
             self._cap.release()
