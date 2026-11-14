@@ -14,12 +14,14 @@ export function useAlarm() {
       audioCtxRef.current = new AudioCtx();
     }
     if (audioCtxRef.current.state === 'suspended') {
-      audioCtxRef.current.resume();
+      audioCtxRef.current.resume().catch(() => {});
     }
   };
 
   const beep = () => {
     if (!audioCtxRef.current) return;
+    // El navegador puede suspender el audio por su cuenta: se reanuda para que la alarma no quede muda
+    if (audioCtxRef.current.state !== 'running') audioCtxRef.current.resume().catch(() => {});
     const now = Date.now();
     if (now - lastBeepRef.current < ALARM_MIN_INTERVAL_MS) return;
     lastBeepRef.current = now;

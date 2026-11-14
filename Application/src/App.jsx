@@ -60,9 +60,11 @@ function App() {
       <p className="sr-only" role="status">
         {!isActive
           ? "Monitorización en pausa."
-          : hasAlarm(telemetry)
-            ? "Atención: falta un elemento de protección en la imagen."
-            : "Sin infracciones en la imagen."}
+          : backendOnline !== true
+            ? "Sin datos del servidor."
+            : hasAlarm(telemetry)
+              ? "Atención: falta un elemento de protección en la imagen."
+              : "Sin infracciones en la imagen."}
       </p>
 
       {isActive && backendOnline === false && (
@@ -75,7 +77,7 @@ function App() {
         <VideoCard
           isActive={isActive}
           onToggleActive={toggleActive}
-          hasInfraction={isActive && hasAlarm(telemetry)}
+          hasInfraction={isActive && backendOnline === true && hasAlarm(telemetry)}
           device={telemetry.device}
           weightsFormat={telemetry.weights_format}
           backendOnline={backendOnline}
@@ -85,12 +87,12 @@ function App() {
           <ControlPanel
             confThreshold={confidence.pendingConf ?? telemetry.conf_threshold}
             onConfidenceChange={confidence.onChange}
+            confidenceError={confidence.error}
             soundEnabled={soundEnabled}
             onToggleSound={toggleSound}
             camera={telemetry.camera}
             cameraError={telemetry.camera_error}
             onOpenCameraModal={() => {
-              cameras.clearSelectError();
               cameras.loadCameras();
               setCameraModalOpen(true);
             }}
@@ -123,7 +125,10 @@ function App() {
           onRefresh={cameras.refreshCameras}
           onSelectLocal={cameras.selectLocalCamera}
           onSelectIp={cameras.selectIpCamera}
-          onClose={() => setCameraModalOpen(false)}
+          onClose={() => {
+            cameras.clearSelectError();
+            setCameraModalOpen(false);
+          }}
         />
       )}
 

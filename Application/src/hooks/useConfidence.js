@@ -10,6 +10,7 @@ import { postJson } from '../lib/api';
  */
 export function useConfidence(setTelemetry) {
   const [pendingConf, setPendingConf] = useState(null);
+  const [error, setError] = useState(null);
   const timerRef = useRef(null);
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
@@ -17,6 +18,7 @@ export function useConfidence(setTelemetry) {
   const onChange = (e) => {
     const value = parseFloat(e.target.value);
     setPendingConf(value);
+    setError(null);
 
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(async () => {
@@ -24,14 +26,17 @@ export function useConfidence(setTelemetry) {
         const { ok, data } = await postJson("/api/settings", { conf: value });
         if (ok) {
           setTelemetry(prev => ({ ...prev, conf_threshold: data.conf_threshold }));
+          setError(null);
+        } else {
+          setError(typeof data.detail === "string" ? data.detail : "No se pudo cambiar el umbral");
         }
-      } catch (error) {
-        console.error(error);
+      } catch {
+        setError("No se pudo cambiar el umbral: sin conexión con el servidor");
       }
       // Solo se libera si el usuario no ha movido el deslizador desde este envío
       setPendingConf(current => (current === value ? null : current));
     }, CONF_DEBOUNCE_MS);
   };
 
-  return { pendingConf, onChange };
+  return { pendingConf, onChange, error };
 }

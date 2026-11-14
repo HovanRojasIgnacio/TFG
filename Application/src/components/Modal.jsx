@@ -3,9 +3,11 @@ import { useEffect, useRef } from 'react';
 /** Diálogo modal accesible basado en <dialog>: el navegador gestiona el foco, Escape y el fondo. */
 export default function Modal({ label, onClose, className = '', children }) {
   const dialogRef = useRef(null);
-  // Solo cierra un clic que empieza y termina en el fondo. Si se arrastra para seleccionar texto dentro del
-  // diálogo y se suelta fuera, el navegador envía el clic al fondo y, sin esta comprobación, se cerraba.
+  // Solo cierra un clic que empieza y termina en el fondo. Si se arrastra desde dentro del diálogo y se suelta
+  // fuera, o desde el fondo y se suelta dentro, el navegador envía el clic al fondo o al diálogo y, sin esta
+  // comprobación, se cerraba.
   const pressedOnBackdrop = useRef(false);
+  const releasedOnBackdrop = useRef(false);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -26,8 +28,9 @@ export default function Modal({ label, onClose, className = '', children }) {
       aria-label={label}
       onCancel={(e) => { e.preventDefault(); onClose(); }}
       onMouseDown={(e) => { pressedOnBackdrop.current = e.target === e.currentTarget; }}
+      onMouseUp={(e) => { releasedOnBackdrop.current = e.target === e.currentTarget; }}
       onClick={(e) => {
-        if (pressedOnBackdrop.current && e.target === e.currentTarget) onClose();
+        if (pressedOnBackdrop.current && releasedOnBackdrop.current && e.target === e.currentTarget) onClose();
       }}
     >
       <div className="modal-body">

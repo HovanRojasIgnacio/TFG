@@ -63,12 +63,15 @@ export function useCameras(setTelemetry, onSelected) {
   };
 
   const refreshCameras = async () => {
+    setTestingCamera(true);
     try {
       // Abre cada cámara para comprobarla: tarda
       const data = await getJson("/api/cameras?refresh=true", { timeoutMs: CAMERA_SELECT_TIMEOUT_MS });
       setAvailableCameras(data.available_local || []);
-    } catch (error) {
-      console.error("Error refreshing cameras:", error);
+    } catch {
+      setSelectError("No se pudo actualizar la lista de cámaras");
+    } finally {
+      setTestingCamera(false);
     }
   };
 

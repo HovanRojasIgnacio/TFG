@@ -9,6 +9,7 @@ export default function ControlPanel({
   onToggleSound,
   camera,
   cameraError,
+  confidenceError,
   onOpenCameraModal,
   profiles,
   onSelectProfile
@@ -17,7 +18,7 @@ export default function ControlPanel({
   const loadingProfile = profiles.loading
     ? profiles.profiles.find(p => p.id === profiles.loading)?.name ?? profiles.loading
     : null;
-  const profileError = profiles.selectError || profiles.error;
+  const profileError = profiles.error || profiles.selectError;
 
   return (
     <section className="card config-card" aria-labelledby="console-title">
@@ -67,6 +68,7 @@ export default function ControlPanel({
         <p className="slider-desc" id="confidence-help">
           Más alto: menos detecciones, pero más seguras. Más bajo: más detecciones, con más errores.
         </p>
+        {confidenceError && <ErrorMessage>{confidenceError}</ErrorMessage>}
       </div>
 
       <div className="control-group">
