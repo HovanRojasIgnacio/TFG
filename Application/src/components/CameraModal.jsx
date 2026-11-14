@@ -22,12 +22,13 @@ export default function CameraModal({
 
       {error && <ErrorMessage>{error}</ErrorMessage>}
 
-      {testing && <p className="slider-desc" role="status">Probando la cámara…</p>}
+      {testing && <p className="slider-desc" role="status">Comprobando las cámaras…</p>}
 
       <div className="camera-tab">
         <button
           className="tab-btn"
           onClick={onRefresh}
+          disabled={testing}
         >
           <span aria-hidden="true">🔄 </span>Actualizar cámaras locales
         </button>

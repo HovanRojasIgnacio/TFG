@@ -84,3 +84,22 @@ test('GET se cancela con la señal que se le pasa', async () => {
     }
   );
 });
+
+test('GET lanza un error si la petición tarda más que timeoutMs', async () => {
+  await withFetch(
+    (u, { signal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason));
+    }),
+    async () => {
+      await assert.rejects(getJson('/api/stats', { timeoutMs: 30 }), { name: 'TimeoutError' });
+    }
+  );
+});
+
+test('POST pasa una señal a fetch', async () => {
+  let options;
+  await withFetch(async (u, o) => { options = o; return answer(200, {}); }, async () => {
+    await postJson('/api/settings', { conf: 0.4 });
+  });
+  assert.ok(options.signal instanceof AbortSignal);
+});
