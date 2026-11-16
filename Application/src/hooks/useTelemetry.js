@@ -14,6 +14,7 @@ const INITIAL_TELEMETRY = {
   safety_score: 100,
   conf_threshold: DEFAULT_CONF,
   infractions: [],
+  infractions_total: 0,
   camera: null,
   camera_error: null
 };

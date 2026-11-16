@@ -30,7 +30,12 @@ def apart(n):
 
 
 class CascoRegressionTest(unittest.TestCase):
-    """El perfil casco cuenta exactamente igual que counting.py antes de los perfiles (fixture grabado)."""
+    """El perfil casco cuenta igual que counting.py antes de los perfiles (fixture grabado).
+
+    Desde el 16 de noviembre de 2026 hay una diferencia deliberada: de dos recuadros de la misma cabeza que se
+    contradicen (con casco y sin casco) solo cuenta el más fiable. Cambió el recuento esperado de 4 de los 80
+    frames (30, 41, 48 y 51), en los que un operario contaba dos veces.
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -73,6 +78,31 @@ class CascoHierarchyTest(unittest.TestCase):
         self.assertEqual(result.flags, [True, False, True])
         self.assertEqual(result.highest_violation, 0.8)
 
+
+    def test_a_head_marked_with_and_without_helmet_counts_once(self):
+        # El modelo marca la misma cabeza como head_with_helmet y como head: cuenta el recuadro más fiable
+        boxes = [[100, 100, 200, 200], [102, 101, 201, 203]]
+        result = counting.count(self.profile, ["head_with_helmet", "head"], [0.9, 0.5], boxes)
+        self.assertEqual(result.items, {"helmet": {"ok": 1, "missing": 0}})
+        self.assertEqual((result.flags, result.violations, result.safety_score), ([True, False], 0, 100))
+        result = counting.count(self.profile, ["head_with_helmet", "head"], [0.4, 0.7], boxes)
+        self.assertEqual(result.items, {"helmet": {"ok": 0, "missing": 1}})
+        self.assertEqual(result.highest_violation, 0.7)
+
+    def test_two_heads_side_by_side_both_count(self):
+        boxes = [[100, 100, 200, 200], [190, 100, 290, 200]]
+        result = counting.count(self.profile, ["head_with_helmet", "head"], [0.9, 0.5], boxes)
+        self.assertEqual(result.items, {"helmet": {"ok": 1, "missing": 1}})
+
+    def test_the_same_person_marked_twice_counts_the_more_confident_box(self):
+        # Sin cabeza detectada, la misma persona marcada con casco y sin casco: decide la confianza, no el orden
+        boxes = {"no": ("person_no_helmet", 0.4, [100, 100, 200, 400]),
+                 "yes": ("person_with_helmet", 0.9, [102, 101, 201, 403])}
+        for order in itertools.permutations(boxes):
+            with self.subTest(order=order):
+                names, confs, coords = zip(*(boxes[k] for k in order))
+                result = counting.count(self.profile, list(names), list(confs), list(coords))
+                self.assertEqual(result.items, {"helmet": {"ok": 1, "missing": 0}})
 
     def test_a_head_at_mid_height_does_not_hide_the_person(self):
         # La cabeza con casco de un vecino (cuya persona no se detectó) cae a media altura de este operario sin

@@ -36,8 +36,12 @@ export function infractionTime(inf, today = localDate()) {
   return inf.date && inf.date !== today ? `${inf.date} ${inf.timestamp}` : inf.timestamp;
 }
 
-/** Texto del contador de la galería, que muestra como mucho las 12 últimas infracciones. */
-export function galleryCount(n) {
+/**
+ * Texto del contador de la galería: las últimas infracciones (como mucho 12) o, con `all`, el registro
+ * completo que conserva el servidor.
+ */
+export function galleryCount(n, all = false) {
   if (n <= 0) return "";
+  if (all) return n === 1 ? "La única guardada" : `Las ${n} guardadas`;
   return n === 1 ? "La más reciente" : `Las ${n} más recientes`;
 }

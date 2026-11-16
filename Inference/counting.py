@@ -6,9 +6,10 @@ niveles: el de casco desplegado ve la persona (person_with_helmet, person_no_hel
 tres "cascos correctos". Por eso, cuando el perfil asigna niveles, se cuenta cada cabeza y, además, cada persona
 en cuyo recuadro no hay ninguna cabeza detectada (un operario lejano o de espaldas del que solo se ve el cuerpo);
 las clases sin nivel (el casco suelto) no cuentan, porque ya las representa la cabeza. Si el perfil no asigna
-niveles a ninguna clase (por ejemplo, un modelo Helmet / NoHelmet / Vest / NoVest) se cuenta cada recuadro,
-salvo cuando el modelo se contradice: si marca el mismo sitio como "lleva" y como "falta" el mismo elemento (la
-supresión de no máximos es por clase y no lo evita), solo cuenta el recuadro con más confianza.
+niveles a ninguna clase (por ejemplo, un modelo Helmet / NoHelmet / Vest / NoVest) se cuenta cada recuadro.
+En ambos casos hay una excepción, cuando el modelo se contradice: si marca el mismo sitio (la misma cabeza)
+como "lleva" y como "falta" el mismo elemento (la supresión de no máximos es por clase y no lo evita), solo
+cuenta el recuadro con más confianza.
 """
 from typing import Dict, List, NamedTuple, Sequence
 
@@ -49,14 +50,14 @@ def _head_zone_persons(boxes: Sequence[Box], persons: List[int], head: int) -> L
             and head_cy <= boxes[i][1] + HEAD_ZONE * (boxes[i][3] - boxes[i][1])]
 
 
-def _represented_persons(rules, boxes: Sequence[Box]) -> set:
-    """Índices de las personas a las que representa alguna cabeza (su operario ya cuenta por la cabeza)."""
+def _represented_persons(rules, boxes: Sequence[Box], heads: List[bool]) -> set:
+    """Índices de las personas a las que representa alguna cabeza que cuenta (su operario ya cuenta por ella)."""
     # Una cabeza representa a la persona del borde superior más cercano; a las demás que la contienen solo si
     # dicen lo mismo que ella (el modelo ha marcado dos veces al mismo operario). Una persona sin casco no
     # desaparece por la cabeza con casco de otra.
     persons = [i for i, r in enumerate(rules) if r.level == 1]
     represented = set()
-    for head in (j for j, r in enumerate(rules) if r.level == 0):
+    for head in (j for j, counted in enumerate(heads) if counted):
         inside = _head_zone_persons(boxes, persons, head)
         if not inside:
             continue
@@ -73,18 +74,20 @@ def _claim_person(i: int, boxes: Sequence[Box], represented: set, claimed: List[
     return True
 
 
-def _flags_with_levels(rules, boxes: Sequence[Box]) -> List[bool]:
+def _flags_with_levels(rules, boxes: Sequence[Box], confs: Sequence[float]) -> List[bool]:
     """Perfil con niveles: cuentan las cabezas y las personas que no representa ninguna cabeza ni otra persona."""
-    represented = _represented_persons(rules, boxes)
+    # Cada cabeza es un operario, salvo la que el modelo marca dos veces, con casco y sin casco: de las dos solo
+    # cuenta la más fiable (si contaran ambas, un operario con casco daría además una infracción)
+    heads = [r.level == 0 and r.state in ("ok", "missing") for r in rules]
+    _drop_contradictions(rules, boxes, confs, heads)
+    represented = _represented_persons(rules, boxes, heads)
     claimed = [boxes[i] for i in sorted(represented)]  # Personas ya representadas o ya contadas
-    flags = []
-    for i, rule in enumerate(rules):
-        if rule.state in ("neutral", "ignore"):
-            flags.append(rule.state == "neutral")      # neutral se muestra; ignore no
-        elif rule.level == 1:
-            flags.append(_claim_person(i, boxes, represented, claimed))
-        else:
-            flags.append(rule.level == 0)              # cada cabeza es un operario; el casco suelto, no
+    # neutral se muestra; ignore y el casco suelto (sin nivel), no
+    flags = [head or r.state == "neutral" for r, head in zip(rules, heads)]
+    # De más a menos fiable: de dos recuadros de la misma persona cuenta el más fiable, lleguen en el orden que sea
+    persons = [i for i, r in enumerate(rules) if r.level == 1 and r.state in ("ok", "missing")]
+    for i in sorted(persons, key=lambda k: -confs[k]):
+        flags[i] = _claim_person(i, boxes, represented, claimed)
     return flags
 
 
@@ -92,15 +95,15 @@ def counted_flags(profile: Profile, class_names: Sequence[str],
                   boxes: Sequence[Box], confs: Sequence[float]) -> List[bool]:
     """Indica, para cada recuadro del frame, si cuenta en los contadores (un recuadro por operario).
 
-    Cada operario se identifica por su posición. Con niveles en el perfil cuentan todas las cabezas y las
-    personas a las que no representa ninguna cabeza, salvo que se solapen con otra persona ya representada
-    (el modelo a veces marca dos veces a la misma persona). Sin niveles cuenta cada recuadro no neutral
-    ni ignorado, salvo las contradicciones.
+    Cada operario se identifica por su posición. Con niveles en el perfil cuentan las cabezas y las personas a
+    las que no representa ninguna cabeza, salvo que se solapen con otra persona ya representada (el modelo a
+    veces marca dos veces a la misma persona). Sin niveles cuenta cada recuadro no neutral ni ignorado. En los
+    dos casos, de dos recuadros solapados que se contradicen solo cuenta el más fiable.
     """
     rules = [profile.rule(n) for n in class_names]
     # La jerarquía la decide el perfil, no el frame: un casco suelto no es un operario aunque sea lo único visible
     if any(r.level is not None for r in profile.classes.values()):
-        return _flags_with_levels(rules, boxes)
+        return _flags_with_levels(rules, boxes, confs)
     flags = [r.state != "ignore" for r in rules]  # cada recuadro cuenta; el neutral se muestra
     _drop_contradictions(rules, boxes, confs, flags)
     return flags

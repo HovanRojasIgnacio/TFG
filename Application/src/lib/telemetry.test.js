@@ -47,4 +47,6 @@ test('contador de la galería', () => {
   assert.equal(galleryCount(0), '');
   assert.equal(galleryCount(1), 'La más reciente');
   assert.equal(galleryCount(12), 'Las 12 más recientes');
+  assert.equal(galleryCount(100, true), 'Las 100 guardadas');
+  assert.equal(galleryCount(1, true), 'La única guardada');
 });

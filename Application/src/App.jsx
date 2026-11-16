@@ -6,6 +6,7 @@ import { useAlarm } from './hooks/useAlarm';
 import { useCameras } from './hooks/useCameras';
 import { useConfidence } from './hooks/useConfidence';
 import { useProfiles } from './hooks/useProfiles';
+import { useInfractionLog } from './hooks/useInfractionLog';
 import VideoCard from './components/VideoCard';
 import ControlPanel from './components/ControlPanel';
 import MetricsCard from './components/MetricsCard';
@@ -39,6 +40,7 @@ function App() {
   const confidence = useConfidence(setTelemetry);
   const cameras = useCameras(setTelemetry, () => setCameraModalOpen(false));
   const profiles = useProfiles(backendOnline, telemetry.profile_loading);
+  const infractionLog = useInfractionLog();
 
   return (
     <div className="app-container">
@@ -110,7 +112,16 @@ function App() {
         </div>
       </main>
 
-      <InfractionGallery infractions={telemetry.infractions} onView={setActiveModalImg} />
+      <InfractionGallery
+        infractions={infractionLog.all ?? telemetry.infractions}
+        total={telemetry.infractions_total}
+        showingAll={infractionLog.all !== null}
+        loading={infractionLog.loading}
+        error={infractionLog.error}
+        onShowAll={infractionLog.showAll}
+        onShowRecent={infractionLog.showRecent}
+        onView={setActiveModalImg}
+      />
 
       {activeModalImg && (
         <EvidenceModal imageUrl={activeModalImg} onClose={() => setActiveModalImg(null)} />

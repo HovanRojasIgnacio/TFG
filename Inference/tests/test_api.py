@@ -107,6 +107,22 @@ class ViolationConfirmationTest(PipelineTestCase):
             self.process(detections)
         self.assertTrue(self.pipeline.violation_confirmed)
 
+    def test_a_violation_that_stays_is_recorded_once_a_minute(self):
+        # Diez minutos con el mismo operario sin casco: una captura por minuto, no una cada 4 s (que llenaba
+        # el registro de 100 entradas en menos de siete minutos y borraba todo lo anterior)
+        for _ in range(10 * 60 * 10):
+            self.process(NO_HELMET)
+        self.assertEqual(len(self.pipeline.infractions_log), 10)
+
+    def test_a_new_violation_is_recorded_without_waiting_a_minute(self):
+        for _ in range(video.VIOLATION_WINDOW):
+            self.process(NO_HELMET)
+        for _ in range(video.VIOLATION_WINDOW * 5):   # El operario se va: la infracción termina (y pasan 4 s)
+            self.process(HELMET)
+        for _ in range(video.VIOLATION_WINDOW):
+            self.process(NO_HELMET)
+        self.assertEqual(len(self.pipeline.infractions_log), 2)
+
     def test_confirmation_ends_when_the_violation_disappears(self):
         for _ in range(video.VIOLATION_WINDOW):
             self.process(NO_HELMET)
@@ -154,13 +170,17 @@ class UndeletedSnapshotTest(PipelineTestCase):
         with mock.patch.object(evidence, "LOG_SIZE", 2):
             self.pipeline = self.new_pipeline()
         for _ in range(2):
-            self.now += 5  # Más que el intervalo mínimo entre capturas
+            self.next_capture_allowed()
             self.record_one_more()
-        self.now += 5
+        self.next_capture_allowed()
         with mock.patch.object(video.os, "remove", side_effect=PermissionError("en uso")):
             self.record_one_more()
         self.assertEqual(len(self.snapshots()), 3)  # La más antigua sigue en el disco sin entrada en el registro
         self.assertEqual(len(self.pipeline.infractions_log), 2)
+
+    def next_capture_allowed(self):
+        """Deja pasar el tiempo que separa dos capturas de una infracción que sigue en la imagen."""
+        self.now += self.pipeline.repeat_cooldown + 1
 
     def listed(self):
         return {os.path.basename(e["image_path"]) for e in self.pipeline.infractions_log}
@@ -211,7 +231,7 @@ class ApiTest(PipelineTestCase):
         patcher = mock.patch.object(execute, "pipeline", self.pipeline)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.client = TestClient(execute.app)
+        self.client = TestClient(execute.app, base_url="http://localhost")
 
     def test_stats(self):
         for _ in range(video.VIOLATION_MIN_FRAMES):
@@ -221,7 +241,29 @@ class ApiTest(PipelineTestCase):
         self.assertEqual((data["violations"], data["violation_confirmed"], data["safety_score"]), (1, True, 0))
         self.assertEqual(data["profile"]["id"], "casco_chaleco")
         self.assertEqual(len(data["infractions"]), 1)
-        self.assertTrue(data["infractions"][0]["image_url"].startswith("http://testserver/static/infractions/"))
+        self.assertTrue(data["infractions"][0]["image_url"].startswith("http://localhost/static/infractions/"))
+
+    def test_the_whole_log_can_be_read(self):
+        with mock.patch.object(self.pipeline, "repeat_cooldown", 0.0), \
+                mock.patch.object(self.pipeline, "save_cooldown", 0.0):
+            for _ in range(video.VIOLATION_MIN_FRAMES + 14):
+                self.process(NO_HELMET)
+        stats = self.client.get("/api/stats").json()
+        self.assertEqual((len(stats["infractions"]), stats["infractions_total"]), (12, 15))
+        log = self.client.get("/api/infractions").json()["infractions"]
+        self.assertEqual(len(log), 15)
+        self.assertEqual(log[-12:], stats["infractions"])
+        self.assertTrue(log[0]["image_url"].startswith("http://localhost/static/infractions/"))
+
+    def test_only_this_server_is_answered(self):
+        # Una página maliciosa cuyo dominio apunta a 127.0.0.1 (DNS rebinding) llega con su dominio en Host
+        for host in ("evil.example:8000", "evil.example", "localhost.evil.example", ""):
+            with self.subTest(host=host):
+                self.assertEqual(self.client.get("/api/stats", headers={"Host": host}).status_code, 400)
+        for host in ("localhost:8000", "127.0.0.1:8000", "192.168.1.50:8000", "[::1]:8000", "LOCALHOST"):
+            with self.subTest(host=host):
+                self.assertEqual(self.client.get("/api/stats", headers={"Host": host}).status_code, 200)
+        self.assertTrue(execute.host_allowed(execute.socket.gethostname()))
 
     def test_settings(self):
         self.assertEqual(self.client.post("/api/settings", json={"conf": 0.5}).json()["conf_threshold"], 0.5)
@@ -403,6 +445,53 @@ class CameraTest(PipelineTestCase):
         self.assertTrue(caps[1].released)
 
 
+    def test_a_lost_camera_replaces_the_last_frame(self):
+        # Con un espectador conectado, la cámara da 5 fotogramas y se pierde: el stream no debe quedarse con el
+        # último fotograma (con sus personas y recuadros), sino con la imagen de «SIN IMAGEN»
+        caps = [FakeCapture(frames=5), FakeCapture(opened=False)]
+        opened = []
+
+        def open_capture(_source):
+            opened.append(caps[min(len(opened), 1)])
+            return opened[-1]
+        patches = [mock.patch.object(video, "FRAME_FAIL_TIMEOUT", 0.1),
+                   mock.patch.object(cameras, "open_capture", open_capture)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.model.detections = NO_HELMET
+        self.pipeline.last_viewer_time = video.time.time() + 1000
+        self.pipeline.thread.start()
+        self.addCleanup(self.pipeline.stop)
+        seen_video = False
+        with self.assertLogs("guardwatch", level="WARNING"):
+            for _ in range(300):
+                frame = self.pipeline.latest_encoded_frame
+                seen_video = seen_video or (frame is not None and frame is not video.NO_SIGNAL_JPEG)
+                if seen_video and frame is video.NO_SIGNAL_JPEG and self.pipeline.camera_error:
+                    break
+                video.time.sleep(0.02)
+        self.assertTrue(seen_video)
+        self.assertIs(self.pipeline.latest_encoded_frame, video.NO_SIGNAL_JPEG)
+        self.assertIsNotNone(self.pipeline.camera_error)
+        frame_id = self.pipeline.frame_id
+        video.time.sleep(0.6)   # Se publica una vez, no en cada reintento
+        self.assertEqual(self.pipeline.frame_id, frame_id)
+
+    def test_the_camera_list_shows_only_cameras_that_exist(self):
+        self.addCleanup(cameras.camera_cache.update, cameras=[], last_update=0)
+        with mock.patch.object(cameras, "_probe_local_camera", return_value=None) as probe:
+            # Sin ninguna cámara: la que el servidor intenta abrir (y no consigue) no se da por buena
+            self.assertEqual(self.pipeline.get_camera_info(force_refresh=True)["available_local"], [])
+            probe.assert_any_call(0)
+            # La cámara abierta en el índice 3 aparece aunque falten las de los índices 1 y 2, y no se sondea
+            probe.reset_mock()
+            self.pipeline.camera_source = cameras.CameraSource(type="local", index=3, name="Cuarta")
+            self.pipeline._cap = FakeCapture()
+            listed = self.pipeline.get_camera_info(force_refresh=True)["available_local"]
+            self.assertEqual([c["index"] for c in listed], [3])
+            self.assertNotIn(mock.call(3), probe.call_args_list)
+
     def test_a_camera_change_clears_the_previous_cameras_violations(self):
         for _ in range(video.VIOLATION_MIN_FRAMES):
             self.process(NO_HELMET)
@@ -434,6 +523,15 @@ class MaskUrlTest(unittest.TestCase):
         for url, masked in cases.items():
             with self.subTest(url=url):
                 self.assertEqual(cameras.mask_url(url), masked)
+
+
+class RetentionTest(unittest.TestCase):
+    def test_the_retention_must_be_a_positive_number_of_days(self):
+        self.assertEqual(evidence.retention_days("30"), 30.0)
+        self.assertEqual(evidence.retention_days("0.5"), 0.5)
+        for raw in ("0", "-1", "nan", "inf", "", "un mes"):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                evidence.retention_days(raw)
 
 
 class ImportTest(unittest.TestCase):
