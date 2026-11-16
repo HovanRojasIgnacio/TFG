@@ -1,6 +1,7 @@
 """Evidencias: capturas de las infracciones y registro (infractions.json) que sobrevive a los reinicios."""
 import json
 import logging
+import math
 import os
 import time
 from typing import Dict, List
@@ -15,7 +16,26 @@ os.makedirs(infractions_dir, exist_ok=True)
 
 # Días que se conservan las capturas de infracciones. La Ley Orgánica 3/2018 (art. 22) fija un máximo de un
 # mes para las imágenes de videovigilancia salvo que se necesiten para acreditar un hecho.
-SNAPSHOT_RETENTION_DAYS = float(os.environ.get("GUARDWATCH_SNAPSHOT_DAYS", "30"))
+def retention_days(raw: str) -> float:
+    """Valida GUARDWATCH_SNAPSHOT_DAYS: un número de días mayor que cero.
+
+    Con 0 o un valor negativo la limpieza borraría todas las capturas, incluidas las recién guardadas, y con
+    "nan" no borraría ninguna.
+    """
+    try:
+        days = float(raw)
+    except ValueError:
+        days = math.nan
+    if not (math.isfinite(days) and days > 0):
+        raise ValueError(f"GUARDWATCH_SNAPSHOT_DAYS={raw!r} no es válido: debe ser un número de días mayor "
+                         "que 0 (por ejemplo, 30)")
+    return days
+
+
+try:
+    SNAPSHOT_RETENTION_DAYS = retention_days(os.environ.get("GUARDWATCH_SNAPSHOT_DAYS", "30"))
+except ValueError as e:
+    raise SystemExit(str(e))
 LOG_SIZE = 100  # Infracciones que conserva el registro
 # El registro se guarda fuera de /static: contiene los nombres de las capturas, que no deben poder adivinarse
 LOG_FILE = os.path.join(current_dir, "infractions.json")

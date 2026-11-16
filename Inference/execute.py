@@ -5,7 +5,9 @@ venv_bootstrap.setup(__name__ == "__main__")
 # corruptos o grises. Se puede cambiar con la variable de entorno (p. ej. "rtsp_transport;udp")
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import asyncio
+import ipaddress
 import logging
+import socket
 import time
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
@@ -54,6 +56,50 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+
+# Nombres con los que se puede llamar al backend. CORS no basta: con «DNS rebinding», una página web maliciosa hace
+# que su propio dominio apunte a 127.0.0.1 y entonces sus peticiones al backend son del mismo origen, así que el
+# navegador le deja leer el vídeo y las infracciones. Esas peticiones llevan el dominio de la página en la
+# cabecera Host; las legítimas llevan localhost, el nombre de este equipo o una dirección IP (una IP no se puede
+# redirigir). GUARDWATCH_HOSTS añade otros nombres separados por comas (por ejemplo, el del equipo en el DNS local).
+ALLOWED_HOSTNAMES = {"localhost", socket.gethostname().lower()} | {
+    h.strip().lower() for h in os.environ.get("GUARDWATCH_HOSTS", "").split(",") if h.strip()}
+
+
+def host_allowed(host: str) -> bool:
+    """True si la cabecera Host (con o sin puerto) es una dirección IP o un nombre de ALLOWED_HOSTNAMES."""
+    host = host.strip().lower()
+    if host.startswith("["):  # IPv6: [::1]:8000
+        name = host[1:].split("]", 1)[0]
+    else:
+        name = host.rsplit(":", 1)[0] if ":" in host else host
+    if name in ALLOWED_HOSTNAMES:
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return False
+
+
+class HostCheckMiddleware:
+    """Rechaza con 400 las peticiones cuya cabecera Host no es este servidor (véase ALLOWED_HOSTNAMES)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            host = dict(scope["headers"]).get(b"host", b"").decode("latin-1")
+            if not host_allowed(host):
+                response = JSONResponse(status_code=400, content={
+                    "detail": "Cabecera Host no admitida (véase GUARDWATCH_HOSTS en el README)"})
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(HostCheckMiddleware)
 
 app.mount("/static", StaticFiles(directory=evidence.static_dir), name="static")
 
@@ -145,14 +191,27 @@ def select_profile(payload: ProfileSelect):
     return JSONResponse(status_code=202, content={"status": "loading", "id": payload.id})
 
 
+RECENT_INFRACTIONS = 12  # Infracciones que acompañan a cada respuesta de /api/stats (se pide cada 500 ms)
+
+
+def _infractions(request: Request, limit=None):
+    """Las últimas `limit` infracciones del registro (todas si es None), con la dirección completa de su imagen."""
+    base_url = str(request.base_url).rstrip("/")
+    entries = list(pipeline.infractions_log)
+    # Convierte rutas relativas a absolutas basadas en la petición actual (sobre copias)
+    return [{**item, "image_url": f"{base_url}{item['image_path']}"}
+            for item in (entries if limit is None else entries[-limit:])]
+
+
+@app.get("/api/infractions")
+def get_infractions(request: Request):
+    """El registro completo de infracciones (hasta 100), de la más antigua a la más reciente."""
+    return {"infractions": _infractions(request)}
+
+
 @app.get("/api/stats")
 def get_stats(request: Request):
-    base_url = str(request.base_url).rstrip("/")
-    # Convierte rutas relativas a absolutas basadas en la petición actual (sobre copias)
-    infractions = [
-        {**item, "image_url": f"{base_url}{item['image_path']}"}
-        for item in list(pipeline.infractions_log)[-12:]
-    ]
+    infractions = _infractions(request, RECENT_INFRACTIONS)
 
     camera_info = pipeline.get_camera_info(probe=False)
     detector = pipeline.detector
@@ -177,6 +236,7 @@ def get_stats(request: Request):
         "safety_score": pipeline.safety_score,
         "conf_threshold": pipeline.conf_threshold,
         "infractions": infractions,
+        "infractions_total": len(pipeline.infractions_log),
         "camera": camera_info["current"],
         "camera_error": camera_info["error"]
     }

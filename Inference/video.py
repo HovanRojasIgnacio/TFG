@@ -10,6 +10,7 @@ import time
 from collections import deque
 from typing import Dict, Optional
 import cv2
+import numpy as np
 import torch
 import cameras
 import counting
@@ -38,6 +39,25 @@ VIOLATION_MIN_FRAMES = 5
 FPS_SMOOTHING = 0.1  # Peso del último frame en la media móvil de los FPS
 
 STATE_COLORS = {"ok": (0, 255, 0), "missing": (0, 0, 255), "neutral": (0, 165, 255)}  # BGR: verde, rojo, naranja
+SAVE_COOLDOWN = 4.0  # Segundos mínimos entre dos capturas de infracciones
+# Mientras la misma infracción sigue en la imagen se guarda una captura cada REPEAT_COOLDOWN segundos: una cada
+# SAVE_COOLDOWN llenaba el registro (100 entradas) en menos de siete minutos y borraba todas las anteriores
+REPEAT_COOLDOWN = 60.0
+
+
+def _no_signal_jpeg() -> bytes:
+    """Imagen que sustituye al vídeo mientras no hay cámara."""
+    image = np.zeros((480, 640, 3), dtype=np.uint8)
+    text, font, scale, thickness = "SIN IMAGEN", cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2
+    (width, height), _ = cv2.getTextSize(text, font, scale, thickness)
+    cv2.putText(image, text, ((640 - width) // 2, (480 + height) // 2), font, scale, (200, 200, 200), thickness)
+    ok, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    if not ok:
+        raise RuntimeError("No se pudo codificar la imagen que sustituye al vídeo")
+    return buffer.tobytes()
+
+
+NO_SIGNAL_JPEG = _no_signal_jpeg()
 
 
 class Detector:
@@ -130,7 +150,9 @@ class VideoPipeline:
         self.profile_error: Optional[str] = None    # Error de la última carga fallida
         self.infractions_log = deque(maxlen=evidence.LOG_SIZE)
         self.last_infraction_save: float = 0.0
-        self.save_cooldown: float = 4.0
+        self.save_cooldown: float = SAVE_COOLDOWN
+        self.repeat_cooldown: float = REPEAT_COOLDOWN
+        self._episode_recorded = False  # La infracción que sigue en la imagen ya tiene su captura
         
         self.latest_encoded_frame = None
         self.frame_id: int = 0  # Se incrementa con cada frame nuevo codificado
@@ -207,8 +229,13 @@ class VideoPipeline:
         """
         try:
             if probe:
+                # La cámara local que el bucle tiene abierta no se vuelve a abrir (se interrumpiría). Si no está
+                # abierta (aún no conectó o falló) se sondea como las demás: darla por buena mostraba en la
+                # lista una cámara que no existe
                 active = self.camera_source
-                skip = active.index if active and active.type == "local" else None
+                in_use = (active is not None and active.type == "local" and self._cap is not None
+                          and self.camera_error is None)
+                skip = active.index if in_use else None
                 available = cameras.detect_local_cameras(force_refresh=force_refresh, skip_index=skip)
             else:
                 available = cameras.camera_cache["cameras"]
@@ -285,6 +312,7 @@ class VideoPipeline:
         self.safety_score = 100
         self.violation_confirmed = False
         self._recent_violations.clear()
+        self._episode_recorded = False
         self.fps = 0.0
 
     def select_profile(self, profile_id: str) -> bool:
@@ -373,10 +401,16 @@ class VideoPipeline:
             self._recent_violations.append(counts.violations > 0)
             self.violation_confirmed = sum(self._recent_violations) >= VIOLATION_MIN_FRAMES
 
-        # Registro de infracciones: solo las confirmadas, y con un frame en el que la infracción se ve
+        # Registro de infracciones: solo las confirmadas, y con un frame en el que la infracción se ve. La primera
+        # captura de una infracción espera save_cooldown desde la anterior; mientras la misma infracción sigue
+        # en la imagen, las siguientes esperan repeat_cooldown
+        if current_mode and not self.violation_confirmed:
+            self._episode_recorded = False
+        cooldown = self.repeat_cooldown if self._episode_recorded else self.save_cooldown
         if current_mode and self.violation_confirmed and counts.violations > 0 and \
-                (current_time - self.last_infraction_save) > self.save_cooldown:
+                (current_time - self.last_infraction_save) > cooldown:
             self._record_infraction(frame, detector, counts, current_time)
+            self._episode_recorded = True
 
         self._publish_frame(frame)
         self.latency_window.append((time.perf_counter() - frame_start) * 1000)
@@ -434,6 +468,17 @@ class VideoPipeline:
             with self.lock:
                 self.latest_encoded_frame = None  # Evita mostrar un frame antiguo al reconectar
 
+    def _publish_no_signal(self):
+        """Sin cámara, el stream muestra «SIN IMAGEN» en lugar del último frame.
+
+        El navegador deja en pantalla el último frame recibido: sin esto, quien miraba el vídeo (o quien se
+        conectara después) seguía viendo a las personas y los recuadros de antes de perder la cámara.
+        """
+        with self.lock:
+            if self.latest_encoded_frame is not NO_SIGNAL_JPEG:
+                self.latest_encoded_frame = NO_SIGNAL_JPEG
+                self.frame_id += 1
+
     def _take_camera_request(self):
         """Recoge el cambio de cámara o la petición de reconectar que haya dejado set_camera."""
         # La cámara nueva se abre fuera del lock: abrir una cámara IP puede tardar segundos y el lock no
@@ -471,6 +516,7 @@ class VideoPipeline:
         """Sin cámara abierta (arranque, cambio, fallo o desconexión): reintento con espera creciente."""
         source = self._current_source
         self._clear_detections()
+        self._publish_no_signal()
         if time.time() >= self._next_retry:
             cap = cameras.open_capture(source)
             if self.camera_source != source:

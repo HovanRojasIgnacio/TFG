@@ -85,7 +85,8 @@ def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
                          skip_index: Optional[int] = None) -> List[Dict]:
     """Detecta las cámaras locales disponibles, con caché.
 
-    skip_index: índice de la cámara en uso por el pipeline; no se reabre para no interrumpirla.
+    skip_index: índice de la cámara que el pipeline tiene abierta; no se reabre para no interrumpirla y
+    aparece siempre en la lista, aunque falten las de los índices anteriores.
     """
     global camera_cache
 
@@ -97,14 +98,16 @@ def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
 
         cameras = []
         consecutive_failures = 0
-        for i in range(max_cameras):
+        last_known = -1 if skip_index is None else skip_index
+        for i in range(max(max_cameras, last_known + 1)):
             camera = _camera_entry(i, 640, 480) if i == skip_index else _probe_local_camera(i)
             if camera:
                 cameras.append(camera)
                 consecutive_failures = 0
             else:
                 consecutive_failures += 1
-            if consecutive_failures >= 2:
+            # Dos índices seguidos sin cámara: no hay más, salvo la que está en uso en un índice posterior
+            if consecutive_failures >= 2 and i >= last_known:
                 break
 
         camera_cache = {"cameras": cameras, "last_update": now}

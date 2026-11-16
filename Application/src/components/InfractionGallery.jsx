@@ -1,7 +1,12 @@
 import { infractionTime, galleryCount, localDate } from '../lib/telemetry';
+import ErrorMessage from './ErrorMessage';
 
-export default function InfractionGallery({ infractions, onView }) {
+export default function InfractionGallery({
+  infractions, total, showingAll, loading, error, onShowAll, onShowRecent, onView
+}) {
   const list = infractions || [];
+  // El servidor conserva más infracciones de las que envía con la telemetría: se pueden pedir todas
+  const hasOlder = !showingAll && (total ?? 0) > list.length;
   // El registro se conserva entre reinicios: la fecha se muestra en las infracciones que no son de hoy
   const today = localDate();
   const when = (inf) => infractionTime(inf, today);
@@ -12,10 +17,28 @@ export default function InfractionGallery({ infractions, onView }) {
         <h2 id="gallery-title">Registro de Infracciones Guardadas</h2>
         {/* El backend envía como mucho las 12 últimas de las 100 que conserva */}
         {list.length > 0 && (
-          <span className="log-count">{galleryCount(list.length)}</span>
+          <span className="log-count">{galleryCount(list.length, showingAll)}</span>
         )}
       </div>
       <div className="divider" />
+
+      {(hasOlder || showingAll) && (
+        <div className="log-actions">
+          {showingAll ? (
+            <button className="tab-btn log-toggle" onClick={onShowRecent}>Ver solo las más recientes</button>
+          ) : (
+            <button className="tab-btn log-toggle" onClick={onShowAll} disabled={loading}>
+              {loading ? 'Cargando el registro…' : `Ver las ${total} guardadas`}
+            </button>
+          )}
+          {showingAll && (
+            <p className="slider-desc" role="status">
+              Registro completo tal como estaba al pedirlo; no se actualiza solo.
+            </p>
+          )}
+        </div>
+      )}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
 
       {list.length === 0 ? (
         <div className="no-infractions">

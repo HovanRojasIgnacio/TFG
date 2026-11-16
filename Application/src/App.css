@@ -417,6 +417,24 @@ input:checked + .slider-switch:before {
   color: var(--text-muted);
 }
 
+.log-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.log-toggle {
+  min-height: 44px;
+  padding: 0.5rem 1rem;
+}
+
+.log-toggle:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .no-infractions {
   padding: 2rem;
   text-align: center;

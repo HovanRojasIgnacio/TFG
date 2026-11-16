@@ -106,7 +106,8 @@ Todas son opcionales. Las del backend se definen antes de `python execute.py` (e
 | `GUARDWATCH_HOST` | `0.0.0.0` | Dirección en la que escucha el backend; `127.0.0.1` lo limita a este equipo. |
 | `GUARDWATCH_PROFILE` | `casco` | Modo de detección con el que arranca. |
 | `GUARDWATCH_ORIGINS` | (vacío) | Direcciones adicionales del panel que el backend acepta, separadas por comas. |
-| `GUARDWATCH_SNAPSHOT_DAYS` | `30` | Días que se conservan las capturas de infracciones. |
+| `GUARDWATCH_HOSTS` | (vacío) | Nombres adicionales con los que se puede llamar al backend, separados por comas (véase «Seguridad y acceso a la red»). |
+| `GUARDWATCH_SNAPSHOT_DAYS` | `30` | Días que se conservan las capturas de infracciones (un número mayor que 0; con otro valor el backend no arranca). |
 | `GUARDWATCH_NO_VENV` | (sin definir) | Con `1`, los scripts no cambian a `Inference/.venv` y usan el Python actual. |
 | `VITE_API_BASE` | `http://localhost:8000` | Dirección del backend que usa el panel (en `Application/.env`). |
 
@@ -158,10 +159,14 @@ $env:GUARDWATCH_HOST = "127.0.0.1"
 python execute.py
 ```
 
+El backend solo responde a las peticiones dirigidas a `localhost`, al nombre de este equipo o a una dirección IP (cabecera `Host`). Así, una página web maliciosa que haga apuntar su propio dominio a `127.0.0.1` («DNS rebinding») no puede leer el vídeo ni las infracciones. Si llamas al backend con otro nombre (por ejemplo, el del equipo en el DNS de la red), añádelo con `GUARDWATCH_HOSTS` (por ejemplo, `$env:GUARDWATCH_HOSTS = "obra-pc.empresa.lan"`); sin él, el backend responde 400.
+
+Si se pierde la cámara, el vídeo muestra «SIN IMAGEN» en lugar del último fotograma, y en la lista de cámaras solo aparecen las que responden.
+
 Las cámaras IP solo admiten URLs `http://`, `https://` o `rtsp://`. Si la URL lleva usuario y contraseña (`rtsp://usuario:clave@host/...`) o parámetros como `pwd=`, la API, el panel y el registro los muestran como `***`. Las cámaras RTSP se leen por TCP; para usar UDP, define `OPENCV_FFMPEG_CAPTURE_OPTIONS="rtsp_transport;udp"` antes de arrancar el backend.
 
 ## Cumplimiento EPI y evidencias
 
 - **Cumplimiento EPI (%)** = elementos llevados / (elementos llevados + elementos que faltan) × 100, sumando todos los elementos del modo (casco, chaleco) en el fotograma actual. En el modo casco cada operario cuenta una vez; en el modo casco y chaleco cuenta cada recuadro, así que un operario con casco y sin chaleco suma un elemento llevado y uno que falta (50 %); si el modelo marca la misma cabeza como "con casco" y "sin casco", solo cuenta el recuadro con más confianza. Las detecciones neutrales no cuentan. Si no se detecta ningún elemento, vale 100 %.
-- **Infracciones:** cuando falta un elemento en 5 de los últimos 8 fotogramas (un falso positivo de un solo fotograma no cuenta) se guarda una captura anotada, como máximo cada 4 segundos, en `Inference/static/infractions/`, y suena la alarma si está activada. El panel muestra las 12 últimas; el registro conserva 100 y se guarda en `Inference/infractions.json`, así que sigue disponible al reiniciar el backend. Cuando una infracción sale de ese registro, su captura se borra del disco. Además, al arrancar y cada hora se borran las capturas con más de 30 días, incluidas las de ejecuciones anteriores (la Ley Orgánica 3/2018 fija un mes como máximo); el plazo se cambia con la variable de entorno `GUARDWATCH_SNAPSHOT_DAYS`.
+- **Infracciones:** cuando falta un elemento en 5 de los últimos 8 fotogramas (un falso positivo de un solo fotograma no cuenta) se guarda una captura anotada, como máximo cada 4 segundos, en `Inference/static/infractions/`, y suena la alarma si está activada. Mientras la misma infracción sigue en la imagen se guarda una captura por minuto, para que una sola infracción larga no llene el registro. El panel muestra las 12 últimas y, con el botón «Ver las N guardadas», todas (`GET /api/infractions`); el registro conserva 100 y se guarda en `Inference/infractions.json`, así que sigue disponible al reiniciar el backend. Cuando una infracción sale de ese registro, su captura se borra del disco. Además, al arrancar y cada hora se borran las capturas con más de 30 días, incluidas las de ejecuciones anteriores (la Ley Orgánica 3/2018 fija un mes como máximo); el plazo se cambia con la variable de entorno `GUARDWATCH_SNAPSHOT_DAYS`.
 - **Espacio en disco:** como mucho se acumulan las capturas de los últimos 30 días (o del plazo de `GUARDWATCH_SNAPSHOT_DAYS`); las más antiguas se borran solas. Puedes vaciar `Inference/static/infractions/` antes si no necesitas las evidencias; si borras la carpeta, el servidor la vuelve a crear.
