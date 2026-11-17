@@ -3,10 +3,10 @@
 
 /**
  * La alarma (sonido, borde rojo y aviso) responde a la infracción confirmada en varios fotogramas, no a un
- * fotograma suelto. Un backend anterior no envía ese campo: entonces vale cualquier infracción.
+ * fotograma suelto.
  */
 export function hasAlarm(data) {
-  return Boolean(data.violation_confirmed ?? data.violations > 0);
+  return data.violation_confirmed === true;
 }
 
 /** Color del porcentaje de cumplimiento, con contraste suficiente sobre la tarjeta (los de App.css). */

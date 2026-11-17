@@ -1,7 +1,8 @@
 """Pruebas de la API y del pipeline de vídeo con un modelo simulado, sin GPU ni cámara.
 
-Necesitan los paquetes de requirements.txt (FastAPI, OpenCV, PyTorch...) y httpx; sin ellos se omiten, de modo
-que `python -m unittest discover -s Inference/tests` sigue funcionando solo con la biblioteca estándar.
+Necesitan FastAPI, Pydantic, NumPy, OpenCV y httpx (no PyTorch ni Ultralytics: el servidor los importa solo al
+cargar un modelo); sin ellos se omiten, de modo que `python -m unittest discover -s Inference/tests` sigue
+funcionando solo con la biblioteca estándar.
 """
 import os
 import sys
@@ -23,7 +24,7 @@ try:
     import profiles
     import video
     from runtime import Runtime
-except ImportError as e:  # Entorno sin las dependencias del servidor (por ejemplo, la integración continua)
+except ImportError as e:  # Entorno sin las dependencias del servidor (solo la biblioteca estándar)
     raise unittest.SkipTest(f"faltan las dependencias del servidor: {e}")
 
 NAMES = {0: "Helmet", 1: "NoHelmet", 2: "NoVest", 3: "Vest"}
@@ -301,7 +302,8 @@ class ProfileChangeTest(PipelineTestCase):
         return video.Detector(profiles.load("casco"), model, Runtime("best.pt", "cuda", False))
 
     def load(self, profile_id, loader):
-        with mock.patch.object(video, "load_detector", loader), mock.patch.object(video.time, "sleep"):
+        with mock.patch.object(video, "load_detector", loader), mock.patch.object(video.time, "sleep"), \
+                mock.patch.object(video, "free_gpu_memory"):
             self.pipeline.profile_loading = profile_id  # Lo que deja select_profile antes de lanzar el hilo
             self.pipeline._load_profile(profile_id)
 

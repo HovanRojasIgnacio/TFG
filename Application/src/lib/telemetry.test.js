@@ -11,9 +11,9 @@ test('la alarma sigue a la infracción confirmada, no a un fotograma suelto', ()
   assert.equal(hasAlarm({ violations: 0, violation_confirmed: false }), false);
 });
 
-test('con un backend anterior, sin violation_confirmed, vale cualquier infracción', () => {
-  assert.equal(hasAlarm({ violations: 2 }), true);
-  assert.equal(hasAlarm({ violations: 0 }), false);
+test('sin violation_confirmed (datos iniciales, antes de la primera respuesta) no hay alarma', () => {
+  assert.equal(hasAlarm({ violations: 2 }), false);
+  assert.equal(hasAlarm({}), false);
 });
 
 test('el color del cumplimiento cambia en 90 y en 60', () => {

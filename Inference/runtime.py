@@ -5,8 +5,10 @@ Orden de preferencia (siempre en la GPU NVIDIA):
      TensorRT...), se genera automáticamente a partir de best.pt (tarda aproximadamente un minuto).
   2. best.pt (PyTorch en FP16), si TensorRT no está instalado o la generación falla.
 """
+import gc
 import hashlib
 import importlib.util
+import json
 import logging
 import os
 import shutil
@@ -14,7 +16,6 @@ import tempfile
 from typing import NamedTuple
 
 import numpy as np
-import torch
 
 logger = logging.getLogger("guardwatch")
 
@@ -28,6 +29,7 @@ class Runtime(NamedTuple):
 
 
 def require_cuda() -> None:
+    import torch  # Aquí y no al principio: así las pruebas de la API se ejecutan sin PyTorch (CI)
     if not torch.cuda.is_available():
         raise RuntimeError(
             f"GuardWatch AI necesita una GPU NVIDIA con CUDA, pero este Python (torch {torch.__version__}) "
@@ -36,21 +38,19 @@ def require_cuda() -> None:
         )
 
 
-def precision_kwargs(half: bool) -> dict:
-    """Argumentos de precisión para predict()/export(), válidos en versiones nuevas y antiguas de Ultralytics.
+def free_gpu_memory() -> None:
+    """Devuelve a CUDA la memoria de los modelos que ya no se usan (al cambiar de modo de detección)."""
+    import torch
+    gc.collect()
+    torch.cuda.empty_cache()
 
-    Las versiones recientes sustituyen `half` por `quantize` y avisan en cada llamada si se usa `half`.
-    Con FP32 o con un motor TensorRT no hace falta pasar nada.
+
+def precision_kwargs(half: bool) -> dict:
+    """Argumentos de precisión para predict()/export() en FP16. Con FP32 o con un motor TensorRT, ninguno.
+
+    La versión de Ultralytics de requirements.txt usa `quantize` (la opción `half` ya no existe).
     """
-    if not half:
-        return {}
-    try:
-        from ultralytics.cfg import DEFAULT_CFG_DICT
-        if "quantize" in DEFAULT_CFG_DICT:
-            return {"quantize": 16}
-    except Exception:
-        pass
-    return {"half": True}
+    return {"quantize": 16} if half else {}
 
 
 def _tensorrt_available() -> bool:
@@ -67,8 +67,28 @@ def _weights_digest(path: str) -> str:
 
 
 def _source_path(engine: str) -> str:
-    """Archivo junto al motor con el SHA-256 de los pesos a partir de los que se generó."""
+    """Archivo junto al motor que dice a partir de qué pesos, en qué GPU y con qué TensorRT se generó."""
     return engine + ".source"
+
+
+def _build_environment() -> dict:
+    """GPU y versión de TensorRT de este equipo: un motor solo es válido con las mismas con las que se generó."""
+    try:
+        import torch
+        gpu = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+    except Exception:
+        gpu = None
+    try:
+        import tensorrt
+        trt = tensorrt.__version__
+    except Exception:
+        trt = None
+    return {"gpu": gpu, "tensorrt": trt}
+
+
+def _engine_signature(weights: str) -> dict:
+    """Lo que se anota al generar un motor y se compara al cargarlo: pesos, GPU y versión de TensorRT."""
+    return {"weights_sha256": _weights_digest(weights), **_build_environment()}
 
 
 def build_engine(base_dir: str) -> bool:
@@ -99,9 +119,10 @@ def build_engine(base_dir: str) -> bool:
             staged = engine + ".tmp"
             shutil.copy2(built, staged)
             os.replace(staged, engine)
-            # Se anota de qué pesos sale el motor (los copiados, no best.pt, por si cambió durante la exportación)
-            with open(_source_path(engine), "w", encoding="ascii") as f:
-                f.write(_weights_digest(tmp_pt))
+            # Se anota de qué pesos sale el motor (los copiados, no best.pt, por si cambió durante la exportación),
+            # en qué GPU y con qué TensorRT
+            with open(_source_path(engine), "w", encoding="utf-8") as f:
+                json.dump(_engine_signature(tmp_pt), f)
     except Exception as e:
         logger.warning("No se pudo generar el motor TensorRT: %s", e)
         return False
@@ -110,23 +131,24 @@ def build_engine(base_dir: str) -> bool:
 
 
 def engine_is_stale(base_dir: str) -> bool:
-    """True si best.engine no se generó a partir del best.pt actual.
+    """True si best.engine no se generó a partir del best.pt actual, en esta GPU y con este TensorRT.
 
-    Se compara el SHA-256 de best.pt con el que build_engine anotó al generar el motor; las fechas de los
-    archivos no sirven, porque copiar unos pesos antiguos conserva su fecha. Sin anotación (motor generado
-    antes de existir esta comprobación o copiado de otro equipo) el motor también se considera antiguo.
-    Sin esta comprobación, al sustituir best.pt el servidor seguiría usando el motor del modelo anterior e
-    informaría de ENGINE como si fuera el actual.
+    Se comparan el SHA-256 de best.pt, el nombre de la GPU y la versión de TensorRT con los que build_engine
+    anotó al generar el motor; las fechas de los archivos no sirven, porque copiar unos pesos antiguos conserva
+    su fecha. Sin anotación, o con la de una versión anterior (solo el SHA-256), el motor también se considera
+    antiguo. Sin esta comprobación, al sustituir best.pt el servidor seguiría usando el motor del modelo
+    anterior, y un motor copiado de un equipo con otra GPU se cargaría aunque TensorRT avisa de que puede ir
+    más lento, dar errores o bloquearse.
     """
     pt, engine = os.path.join(base_dir, "best.pt"), os.path.join(base_dir, "best.engine")
     if not (os.path.exists(pt) and os.path.exists(engine)):
         return False
     try:
-        with open(_source_path(engine), encoding="ascii") as f:
-            built_from = f.read().strip()
-    except OSError:
+        with open(_source_path(engine), encoding="utf-8") as f:
+            built_with = json.load(f)
+    except (OSError, ValueError):
         return True
-    return built_from != _weights_digest(pt)
+    return built_with != _engine_signature(pt)
 
 
 def engine_needed(base_dir: str) -> bool:
