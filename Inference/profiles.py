@@ -15,6 +15,9 @@ dice qué significa cada clase del modelo:
       "source": "dataset, licencia y atribución"
     }
 
+weights (opcional) dice de dónde descargar best.pt si falta en la carpeta: {"url": "https://...", "sha256":
+"..."}; los pesos no están en git (véase runtime.ensure_weights).
+
 state: ok (lleva el elemento), missing (infracción), neutral (se muestra pero no cuenta para el cumplimiento) o
 ignore (ni se dibuja ni se cuenta). level (opcional, "head" o "person") marca las clases de un modelo que ve al
 mismo operario en varios niveles, para contarlo una sola vez (véase counting.py). conf (opcional) es el umbral
@@ -22,12 +25,14 @@ de confianza recomendado para el modelo.
 """
 import json
 import os
+import re
 from typing import Dict, Mapping, NamedTuple, Optional
 
 PROFILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles")
 STATES = ("ok", "missing", "neutral", "ignore")
 LEVELS = {"head": 0, "person": 1}
 CONF_MIN, CONF_MAX = 0.1, 0.95  # Intervalo del umbral de confianza (el del deslizador del panel)
+DEFAULT_CONF = 0.325  # Umbral de un modo cuyo profile.json no recomienda ninguno
 
 
 class ClassRule(NamedTuple):
@@ -45,6 +50,8 @@ class Profile(NamedTuple):
     source: str
     conf: Optional[float]
     base_dir: str
+    weights_url: Optional[str] = None     # Dónde descargar best.pt si falta (véase runtime.ensure_weights)
+    weights_sha256: Optional[str] = None  # SHA-256 que tiene que tener el archivo descargado
 
     def rule(self, class_name: str) -> ClassRule:
         return self.classes[class_name]
@@ -84,8 +91,13 @@ def parse(profile_id: str, data: Mapping, base_dir: str = "") -> Profile:
         if isinstance(conf, bool) or not isinstance(conf, (int, float)) or not CONF_MIN <= conf <= CONF_MAX:
             raise ValueError(f"Perfil {profile_id}: conf debe ser un número entre {CONF_MIN} y {CONF_MAX}")
         conf = float(conf)
+    weights = data.get("weights") or {}
+    url, sha256 = weights.get("url"), weights.get("sha256")
+    if weights and not (isinstance(url, str) and url.startswith("https://")
+                        and isinstance(sha256, str) and re.fullmatch(r"[0-9a-f]{64}", sha256)):
+        raise ValueError(f"Perfil {profile_id}: weights necesita una url https:// y el sha256 del archivo")
     return Profile(profile_id, data.get("name") or profile_id, items, classes, data.get("source", ""),
-                   conf, base_dir)
+                   conf, base_dir, url, sha256)
 
 
 def load(profile_id: str, profiles_dir: str = PROFILES_DIR) -> Profile:

@@ -39,8 +39,10 @@ function App() {
 
   const confidence = useConfidence(setTelemetry);
   const cameras = useCameras(setTelemetry, () => setCameraModalOpen(false));
-  const profiles = useProfiles(backendOnline, telemetry.profile_loading);
-  const infractionLog = useInfractionLog();
+  const profiles = useProfiles(
+    backendOnline, telemetry.profile?.id ?? null, telemetry.profile_loading ?? null, telemetry.profile_error ?? null
+  );
+  const infractionLog = useInfractionLog(telemetry.last_infraction_id, telemetry.infractions_total, backendOnline);
 
   return (
     <div className="app-container">
@@ -100,6 +102,7 @@ function App() {
             }}
             profiles={profiles}
             onSelectProfile={profiles.selectProfile}
+            profilesPaused={!isActive}
           />
           <MetricsCard
             isActive={isActive}
@@ -113,10 +116,9 @@ function App() {
       </main>
 
       <InfractionGallery
-        infractions={infractionLog.all ?? telemetry.infractions}
-        total={telemetry.infractions_total}
-        showingAll={infractionLog.all !== null}
-        loading={infractionLog.loading}
+        infractions={infractionLog.infractions}
+        total={infractionLog.total}
+        showingAll={infractionLog.showingAll}
         error={infractionLog.error}
         onShowAll={infractionLog.showAll}
         onShowRecent={infractionLog.showRecent}

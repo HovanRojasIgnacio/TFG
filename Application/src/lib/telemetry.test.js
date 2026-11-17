@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  hasAlarm, getSafetyColor, getCameraDisplayName, localDate, infractionTime, galleryCount
+  hasAlarm, getSafetyColor, localDate, infractionTime, galleryCount
 } from './telemetry.js';
 
 test('la alarma sigue a la infracción confirmada, no a un fotograma suelto', () => {
@@ -21,14 +21,6 @@ test('el color del cumplimiento cambia en 90 y en 60', () => {
   assert.equal(getSafetyColor(89), getSafetyColor(60));
   assert.equal(getSafetyColor(59), getSafetyColor(0));
   assert.equal(new Set([getSafetyColor(90), getSafetyColor(60), getSafetyColor(59)]).size, 3);
-});
-
-test('nombre de la cámara', () => {
-  assert.equal(getCameraDisplayName(null), 'Cámara no seleccionada');
-  assert.equal(getCameraDisplayName({ type: 'local', index: 2 }), 'Cámara Local 2');
-  assert.equal(getCameraDisplayName({ type: 'local', index: 0, name: 'Portátil' }), 'Portátil');
-  assert.equal(getCameraDisplayName({ type: 'ip', url: 'http://***@host/video' }), 'http://***@host/video');
-  assert.equal(getCameraDisplayName({ type: 'ip', url: 'http://host/video', name: 'Mi Móvil' }), 'Mi Móvil');
 });
 
 test('la fecha local tiene el formato del backend', () => {

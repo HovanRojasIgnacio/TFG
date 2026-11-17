@@ -13,7 +13,8 @@ import logging
 import os
 import shutil
 import tempfile
-from typing import NamedTuple
+import urllib.request
+from typing import NamedTuple, Optional
 
 import numpy as np
 
@@ -64,6 +65,32 @@ def _weights_digest(path: str) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def ensure_weights(base_dir: str, url: Optional[str], sha256: Optional[str]) -> None:
+    """Descarga best.pt en base_dir si falta y el perfil dice de dónde (los pesos no se guardan en git).
+
+    El archivo se descarga aparte y solo se coloca si su SHA-256 es el que indica profile.json: una descarga
+    cortada o un archivo cambiado en el servidor no deja unos pesos rotos o distintos en la carpeta.
+    """
+    pt = os.path.join(base_dir, "best.pt")
+    if os.path.exists(pt) or not url:
+        return
+    logger.info("Descargando los pesos del modo desde %s (unos 20 MB)...", url)
+    staged = pt + ".download"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response, open(staged, "wb") as f:
+            shutil.copyfileobj(response, f)
+        got = _weights_digest(staged)
+        if got != sha256:
+            raise ValueError(f"el SHA-256 del archivo descargado ({got}) no es el de profile.json ({sha256})")
+        os.replace(staged, pt)
+    except Exception as e:
+        raise RuntimeError(f"No se pudieron descargar los pesos de {base_dir}: {e}") from e
+    finally:
+        if os.path.exists(staged):
+            os.remove(staged)
+    logger.info("Pesos descargados: %s", pt)
 
 
 def _source_path(engine: str) -> str:

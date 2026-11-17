@@ -7,14 +7,15 @@ const INITIAL_TELEMETRY = {
   device: "CONECTANDO...",
   weights_format: "DETECTANDO...",
   profile: null,
-  profile_loading: false,
+  profile_loading: null,
+  profile_error: null,
   items: {},
   neutral: 0,
   violations: 0,
   safety_score: 100,
   conf_threshold: DEFAULT_CONF,
-  infractions: [],
   infractions_total: 0,
+  last_infraction_id: null,
   camera: null,
   camera_error: null
 };
@@ -49,8 +50,7 @@ export function useTelemetry(isActive, onStats) {
         setTelemetry(prev => ({
           ...prev,
           ...data,
-          items: data.items && typeof data.items === "object" ? data.items : prev.items,
-          infractions: Array.isArray(data.infractions) ? data.infractions : prev.infractions
+          items: data.items && typeof data.items === "object" ? data.items : prev.items
         }));
         setOnline(true);
         onStatsRef.current?.(data);

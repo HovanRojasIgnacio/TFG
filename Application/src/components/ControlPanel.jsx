@@ -1,5 +1,4 @@
 import { DEFAULT_CONF } from '../config';
-import { getCameraDisplayName } from '../lib/telemetry';
 import ErrorMessage from './ErrorMessage';
 
 export default function ControlPanel({
@@ -12,7 +11,8 @@ export default function ControlPanel({
   confidenceError,
   onOpenCameraModal,
   profiles,
-  onSelectProfile
+  onSelectProfile,
+  profilesPaused
 }) {
   const conf = confThreshold ?? DEFAULT_CONF;
   const loadingProfile = profiles.loading
@@ -32,7 +32,7 @@ export default function ControlPanel({
           className="mode-select"
           aria-describedby="profile-help"
           value={profiles.loading ?? profiles.current ?? ""}
-          disabled={!!profiles.loading || profiles.profiles.length === 0}
+          disabled={profilesPaused || !!profiles.loading || profiles.profiles.length === 0}
           onChange={(e) => onSelectProfile(e.target.value)}
         >
           {profiles.profiles.length === 0 && <option value="">Sin conexión</option>}
@@ -41,9 +41,12 @@ export default function ControlPanel({
           ))}
         </select>
         <p className="slider-desc" id="profile-help" aria-live="polite">
-          {loadingProfile
-            ? `Cargando modelo «${loadingProfile}»… (la primera vez tarda alrededor de un minuto)`
-            : "Elementos de protección que se comprueban."}
+          {/* En pausa no llega la telemetría, que es la que dice cuándo termina la carga de un modo */}
+          {profilesPaused
+            ? "Reanuda la monitorización para cambiar de modo."
+            : loadingProfile
+              ? `Cargando modelo «${loadingProfile}»… (la primera vez tarda alrededor de un minuto)`
+              : "Elementos de protección que se comprueban."}
         </p>
         {profileError && <ErrorMessage>{profileError}</ErrorMessage>}
       </div>
@@ -98,7 +101,7 @@ export default function ControlPanel({
             onClick={onOpenCameraModal}
           >
             <span className="camera-icon" aria-hidden="true">📷</span>
-            <span>{getCameraDisplayName(camera)}</span>
+            <span>{camera?.name ?? "Cámara no seleccionada"}</span>
             <span className="camera-chevron" aria-hidden="true">▼</span>
           </button>
         </div>

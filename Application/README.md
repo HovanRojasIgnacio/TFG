@@ -13,7 +13,8 @@ Desde esta carpeta, después de `npm install`:
 | `npm test` | Pruebas de las funciones puras y de las peticiones de `src/lib/` con el ejecutor de Node, sin dependencias. |
 | `npm run build` | Genera la versión de producción en `dist/`. |
 | `npm run preview` | Sirve `dist/` en `http://localhost:4173/TFG/`. |
-| `npm run deploy` | Compila y publica `dist/` en GitHub Pages. |
+
+La versión de GitHub Pages la publica GitHub Actions con cada push a `main` (véase el README de la raíz).
 
 ## Configuración
 
@@ -25,7 +26,7 @@ Desde esta carpeta, después de `npm install`:
 
 - `src/App.jsx`: composición del panel.
 - `src/components/`: vídeo, consola de control, métricas, galería de infracciones y diálogos.
-- `src/hooks/`: telemetría (`/api/stats`), cámaras, modos de detección, umbral, alarma.
+- `src/hooks/`: telemetría (`/api/stats`), registro de infracciones (`/api/infractions`, solo cuando cambia), cámaras, modos de detección, umbral, alarma.
 - `src/lib/telemetry.js`: funciones puras (alarma, colores, textos).
 - `src/lib/api.js`: peticiones al backend (dirección, tiempo máximo y JSON). Ambos módulos tienen pruebas.
 - `src/config.js`: dirección del backend y constantes de tiempo.

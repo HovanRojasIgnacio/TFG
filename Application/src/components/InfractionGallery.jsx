@@ -2,10 +2,10 @@ import { infractionTime, galleryCount, localDate } from '../lib/telemetry';
 import ErrorMessage from './ErrorMessage';
 
 export default function InfractionGallery({
-  infractions, total, showingAll, loading, error, onShowAll, onShowRecent, onView
+  infractions, total, showingAll, error, onShowAll, onShowRecent, onView
 }) {
   const list = infractions || [];
-  // El servidor conserva más infracciones de las que envía con la telemetría: se pueden pedir todas
+  // El registro guarda más infracciones de las que se muestran al principio: se pueden ver todas
   const hasOlder = !showingAll && (total ?? 0) > list.length;
   // El registro se conserva entre reinicios: la fecha se muestra en las infracciones que no son de hoy
   const today = localDate();
@@ -15,7 +15,7 @@ export default function InfractionGallery({
     <section className="card infractions-section" aria-labelledby="gallery-title">
       <div className="section-header">
         <h2 id="gallery-title">Registro de Infracciones Guardadas</h2>
-        {/* El backend envía como mucho las 12 últimas de las 100 que conserva */}
+        {/* Al principio se muestran las RECENT_INFRACTIONS últimas de las 100 que conserva el backend */}
         {list.length > 0 && (
           <span className="log-count">{galleryCount(list.length, showingAll)}</span>
         )}
@@ -27,14 +27,7 @@ export default function InfractionGallery({
           {showingAll ? (
             <button className="tab-btn log-toggle" onClick={onShowRecent}>Ver solo las más recientes</button>
           ) : (
-            <button className="tab-btn log-toggle" onClick={onShowAll} disabled={loading}>
-              {loading ? 'Cargando el registro…' : `Ver las ${total} guardadas`}
-            </button>
-          )}
-          {showingAll && (
-            <p className="slider-desc" role="status">
-              Registro completo tal como estaba al pedirlo; no se actualiza solo.
-            </p>
+            <button className="tab-btn log-toggle" onClick={onShowAll}>{`Ver las ${total} guardadas`}</button>
           )}
         </div>
       )}

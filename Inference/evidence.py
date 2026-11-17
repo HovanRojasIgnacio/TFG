@@ -1,10 +1,17 @@
-"""Evidencias: capturas de las infracciones y registro (infractions.json) que sobrevive a los reinicios."""
+"""Evidencias: capturas de las infracciones y registro (infractions.json) que sobrevive a los reinicios.
+
+EvidenceRecorder decide cuándo se guarda una captura, la añade al registro, borra la que sale de él y hace la
+limpieza periódica de las capturas antiguas.
+"""
 import json
 import logging
 import math
 import os
+import secrets
 import time
+from collections import deque
 from typing import Dict, List
+import cv2
 import profiles
 
 logger = logging.getLogger("guardwatch")
@@ -37,6 +44,11 @@ try:
 except ValueError as e:
     raise SystemExit(str(e))
 LOG_SIZE = 100  # Infracciones que conserva el registro
+SAVE_COOLDOWN = 4.0  # Segundos mínimos entre dos capturas de infracciones
+# Mientras la misma infracción sigue en la imagen se guarda una captura cada REPEAT_COOLDOWN segundos: una cada
+# SAVE_COOLDOWN llenaba el registro (100 entradas) en menos de siete minutos y borraba todas las anteriores
+REPEAT_COOLDOWN = 60.0
+PURGE_INTERVAL = 3600.0  # Cada cuánto se revisan las capturas antiguas mientras el servidor está en marcha (s)
 # El registro se guarda fuera de /static: contiene los nombres de las capturas, que no deben poder adivinarse
 LOG_FILE = os.path.join(current_dir, "infractions.json")
 
@@ -93,3 +105,100 @@ def missing_details(profile: profiles.Profile, items: Dict[str, Dict[str, int]])
     """Texto de una infracción con los elementos que faltan, p. ej. "Falta: casco ×1, chaleco ×2"."""
     parts = [f"{profile.items[item].lower()} ×{c['missing']}" for item, c in items.items() if c["missing"]]
     return "Falta: " + ", ".join(parts)
+
+
+class EvidenceRecorder:
+    """Capturas de las infracciones confirmadas y su registro (las últimas LOG_SIZE).
+
+    Lo usa solo el hilo de vídeo; la API lee `log` (una deque: leerla mientras se añade una entrada es seguro).
+    """
+
+    def __init__(self):
+        purge_old_snapshots()
+        # Las infracciones de ejecuciones anteriores siguen en el panel
+        self.log = deque(load_log(), maxlen=LOG_SIZE)
+        self.save_cooldown = SAVE_COOLDOWN
+        self.repeat_cooldown = REPEAT_COOLDOWN
+        self._last_save = 0.0
+        self._episode_recorded = False  # La infracción que sigue en la imagen ya tiene su captura
+        self._undeleted = set()         # Capturas que salieron del registro y no se pudieron borrar: se reintenta
+        self._last_purge = time.time()
+
+    def update(self, frame, profile: profiles.Profile, counts, confirmed: bool, now: float) -> None:
+        """Guarda una captura si toca: solo de infracciones confirmadas y de un frame en el que se ven.
+
+        La primera captura de una infracción espera save_cooldown desde la anterior; mientras la misma infracción
+        sigue en la imagen, las siguientes esperan repeat_cooldown.
+        """
+        if not confirmed:
+            self._episode_recorded = False
+            return
+        cooldown = self.repeat_cooldown if self._episode_recorded else self.save_cooldown
+        if counts.violations > 0 and now - self._last_save > cooldown:
+            self._record(frame, profile, counts, now)
+            self._episode_recorded = True
+
+    def reset_episode(self) -> None:
+        """La siguiente infracción es nueva (otra cámara, otro modo o se perdió la imagen)."""
+        self._episode_recorded = False
+
+    def purge_if_due(self) -> None:
+        if time.time() - self._last_purge > PURGE_INTERVAL:
+            self.purge()
+
+    def purge(self) -> None:
+        """Borra las capturas caducadas y quita del registro las entradas cuya imagen ya no existe."""
+        self._last_purge = time.time()
+        self._retry_undeleted()
+        try:
+            removed = purge_old_snapshots()
+        except OSError as e:
+            # Se ejecuta en el único hilo de vídeo: un fallo de disco no debe terminarlo
+            logger.error("No se pudieron revisar las capturas antiguas: %s", e)
+            return
+        if removed:
+            self.log = deque((item for item in self.log if os.path.basename(item["image_path"]) not in removed),
+                             maxlen=self.log.maxlen)
+            save_log(self.log)
+
+    def _retry_undeleted(self) -> None:
+        """Reintenta borrar las capturas que salieron del registro y seguían abiertas en otro programa."""
+        for name in list(self._undeleted):
+            try:
+                os.remove(os.path.join(infractions_dir, name))
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.debug("La captura %s sigue sin poder borrarse: %s", name, e)
+                continue
+            self._undeleted.discard(name)
+
+    def _record(self, frame, profile: profiles.Profile, counts, now: float) -> None:
+        """Guarda la captura y la añade al registro (si está lleno, borra la más antigua)."""
+        # /static no tiene autenticación: el sufijo aleatorio impide adivinar la dirección de una captura
+        filename = f"inf_{int(now)}_{secrets.token_hex(8)}.jpg"
+        filepath = os.path.join(infractions_dir, filename)
+        self._last_save = now
+        if not cv2.imwrite(filepath, frame):
+            # Disco lleno o carpeta sin permisos: sin imagen no se registra una entrada con la evidencia rota
+            logger.error("No se pudo guardar la captura de la infracción en %s", filepath)
+            return
+        # El registro guarda las últimas LOG_SIZE; la imagen de la que sale se borra del disco
+        if len(self.log) == self.log.maxlen:
+            evicted = os.path.basename(self.log[0]["image_path"])
+            try:
+                os.remove(os.path.join(infractions_dir, evicted))
+            except OSError as e:
+                logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
+                self._undeleted.add(evicted)
+
+        self.log.append({
+            "id": int(now * 1000),
+            "date": time.strftime("%Y-%m-%d", time.localtime(now)),
+            "timestamp": time.strftime("%H:%M:%S", time.localtime(now)),
+            "confidence": round(counts.highest_violation, 2),
+            "image_path": f"/static/infractions/{filename}",
+            "profile": profile.name,
+            "details": missing_details(profile, counts.items),
+        })
+        save_log(self.log)

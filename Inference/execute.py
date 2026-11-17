@@ -120,17 +120,18 @@ class ProfileSelect(BaseModel):
 
 @app.post("/api/settings")
 def update_settings(payload: SettingsUpdate):
-    if 0.1 <= payload.conf <= 0.95:
+    if profiles.CONF_MIN <= payload.conf <= profiles.CONF_MAX:
         pipeline.conf_threshold = payload.conf
         pipeline.conf_set_by_user = True
         return {"status": "success", "conf_threshold": pipeline.conf_threshold}
-    raise HTTPException(status_code=400, detail="El umbral debe estar entre 0.10 y 0.95")
+    raise HTTPException(status_code=400,
+                        detail=f"El umbral debe estar entre {profiles.CONF_MIN:.2f} y {profiles.CONF_MAX:.2f}")
 
 
 @app.get("/api/cameras")
 def get_cameras(refresh: bool = False):
     """Devuelve las cámaras disponibles y la seleccionada."""
-    return pipeline.get_camera_info(force_refresh=refresh)
+    return pipeline.camera.info(force_refresh=refresh)
 
 
 @app.post("/api/cameras/select")
@@ -147,8 +148,8 @@ def select_camera(payload: cameras.CameraSource):
     else:
         raise HTTPException(status_code=400, detail="Tipo de cámara no válido (use 'local' o 'ip')")
 
-    if pipeline.set_camera(payload):
-        return {"status": "success", "camera": pipeline.get_camera_info(probe=False)["current"]}
+    if pipeline.camera.select(payload):
+        return {"status": "success", "camera": pipeline.camera.info(probe=False)["current"]}
     raise HTTPException(status_code=400, detail="No se pudo conectar a la cámara seleccionada")
 
 
@@ -185,30 +186,23 @@ def select_profile(payload: ProfileSelect):
     return JSONResponse(status_code=202, content={"status": "loading", "id": payload.id})
 
 
-RECENT_INFRACTIONS = 12  # Infracciones que acompañan a cada respuesta de /api/stats (se pide cada 500 ms)
-
-
-def _infractions(request: Request, limit=None):
-    """Las últimas `limit` infracciones del registro (todas si es None), con la dirección completa de su imagen."""
-    base_url = str(request.base_url).rstrip("/")
-    entries = list(pipeline.infractions_log)
-    # Convierte rutas relativas a absolutas basadas en la petición actual (sobre copias)
-    return [{**item, "image_url": f"{base_url}{item['image_path']}"}
-            for item in (entries if limit is None else entries[-limit:])]
-
-
 @app.get("/api/infractions")
 def get_infractions(request: Request):
-    """El registro completo de infracciones (hasta 100), de la más antigua a la más reciente."""
-    return {"infractions": _infractions(request)}
+    """El registro completo de infracciones (hasta 100), de la más antigua a la más reciente.
+
+    El panel lo pide cuando cambia last_infraction_id en /api/stats, no en cada consulta.
+    """
+    base_url = str(request.base_url).rstrip("/")
+    # Dirección completa de cada imagen, a partir de la de esta petición (sobre copias)
+    return {"infractions": [{**item, "image_url": f"{base_url}{item['image_path']}"}
+                            for item in list(pipeline.evidence.log)]}
 
 
 @app.get("/api/stats")
-def get_stats(request: Request):
-    infractions = _infractions(request, RECENT_INFRACTIONS)
-
-    camera_info = pipeline.get_camera_info(probe=False)
+def get_stats():
+    camera_info = pipeline.camera.info(probe=False)
     detector = pipeline.detector
+    log = list(pipeline.evidence.log)
 
     # Latencia de procesamiento del servidor: lectura del frame -> frame anotado y codificado (últimos 100 frames)
     window = sorted(pipeline.latency_window)
@@ -222,17 +216,18 @@ def get_stats(request: Request):
         "device": detector.runtime.device.upper(),
         "weights_format": detector.weights_format,
         "profile": detector.summary(),
-        "profile_loading": pipeline.profile_loading is not None,
+        "profile_loading": pipeline.profile_loading,  # Id del modo que se está cargando, o None
+        "profile_error": pipeline.profile_error,
         "items": pipeline.items,
         "neutral": pipeline.neutral,
         "violations": pipeline.violations,
         "violation_confirmed": pipeline.violation_confirmed,
         "safety_score": pipeline.safety_score,
         "conf_threshold": pipeline.conf_threshold,
-        "infractions": infractions,
-        "infractions_total": len(pipeline.infractions_log),
+        "infractions_total": len(log),
+        "last_infraction_id": log[-1]["id"] if log else None,
         "camera": camera_info["current"],
-        "camera_error": camera_info["error"]
+        "camera_error": pipeline.camera_error
     }
 
 

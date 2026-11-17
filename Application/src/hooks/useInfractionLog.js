@@ -1,33 +1,38 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { RECENT_INFRACTIONS } from '../config';
 import { getJson } from '../lib/api';
 
 /**
- * Registro completo de infracciones (hasta 100). La telemetría solo trae las 12 últimas; el resto se pide
- * a /api/infractions cuando el usuario quiere verlo. `all` es null mientras se muestran solo las recientes.
- * La lista completa es la del momento en que se pidió: no se actualiza sola.
+ * Registro de infracciones (hasta 100). Se pide a /api/infractions solo cuando cambia: cuando /api/stats trae
+ * otro `lastId` (una infracción nueva) u otro `total` (la limpieza borró alguna), y cuando el backend vuelve a
+ * estar en línea. La galería muestra las RECENT_INFRACTIONS últimas o, con showAll, todas.
  */
-export function useInfractionLog() {
-  const [all, setAll] = useState(null);
-  const [loading, setLoading] = useState(false);
+export function useInfractionLog(lastId, total, backendOnline) {
+  const [entries, setEntries] = useState([]);
+  const [showingAll, setShowingAll] = useState(false);
   const [error, setError] = useState(null);
 
-  const showAll = async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      const data = await getJson("/api/infractions");
-      setAll(Array.isArray(data.infractions) ? data.infractions : []);
-    } catch {
-      setError("No se pudo cargar el registro completo");
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    if (backendOnline !== true) return;
+    let cancelled = false;  // Una respuesta tardía no debe pisar a la de una petición posterior
+    getJson("/api/infractions")
+      .then(data => {
+        if (cancelled) return;
+        setEntries(Array.isArray(data.infractions) ? data.infractions : []);
+        setError(null);
+      })
+      .catch(() => {
+        if (!cancelled) setError("No se pudo cargar el registro de infracciones");
+      });
+    return () => { cancelled = true; };
+  }, [lastId, total, backendOnline]);
 
-  const showRecent = () => {
-    setError(null);
-    setAll(null);
+  return {
+    infractions: showingAll ? entries : entries.slice(-RECENT_INFRACTIONS),
+    total: entries.length,
+    showingAll,
+    error,
+    showAll: () => setShowingAll(true),
+    showRecent: () => setShowingAll(false)
   };
-
-  return { all, loading, error, showAll, showRecent };
 }

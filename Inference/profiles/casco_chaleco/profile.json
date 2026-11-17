@@ -8,5 +8,7 @@
     "NoVest":   {"item": "vest",   "state": "missing"}
   },
   "conf": 0.35,
+  "weights": {"url": "https://github.com/HovanRojasIgnacio/TFG/releases/download/weights-v1/casco_chaleco.pt",
+              "sha256": "edbc1ed51869cf01418951fa309e8e7aadbb17d67606c4fe0f158045a2903a2e"},
   "source": "YOLO26s entrenado el 17 de octubre de 2026 con Inference/train.py sobre el dataset 20250731-PPE2286 (ying2001, Roboflow Universe, https://universe.roboflow.com/ying2001/20250731-ppe2286-m0ega), licencia CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Se separó el 10 % de las imágenes de entrenamiento como conjunto de prueba (split_dataset.py, semilla 0). El umbral conf es el de máxima F1 media en validación (0.357), redondeado al paso del deslizador."
 }

@@ -53,7 +53,9 @@ python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_
 # compatible con tu GPU o con tu versión de TensorRT, el servidor lo genera solo (aprox. 1 minuto).
 # Sin TensorRT instalado, el servidor usa best.pt en la GPU.
 pip install -r requirements-tensorrt.txt
-# (Opcional) generar best.engine y best.onnx de un modo antes de arrancar (por defecto, casco):
+# Los pesos (best.pt) no están en git: el servidor y export.py descargan los de cada modo la primera vez,
+# desde la release de GitHub que indica su profile.json, y comprueban su SHA-256.
+# (Opcional) generar best.engine de un modo antes de arrancar (por defecto, casco); --onnx exporta también best.onnx:
 python export.py
 python export.py --profile casco_chaleco
 
@@ -85,12 +87,7 @@ npm run dev
 El frontend se levantará en el navegador en la dirección: http://localhost:5173/TFG/ (la ruta `/TFG/` viene de `base` en `vite.config.js`)
 
 ## Despliegue en GitHub Pages
-La interfaz de usuario está configurada para compilarse y alojarse directamente de forma estática en GitHub. Si realizas cambios en el diseño de tu app de React y quieres actualizar la versión online, ejecuta desde la carpeta Application:
-
-```bash
-npm run deploy
-```
-La plataforma se empaquetará de forma automática y los cambios se verán reflejados en tu enlace público definitivo:
+GitHub Actions compila el panel y lo publica en GitHub Pages con cada push a `main` que pasa el lint y las pruebas (job `deploy-pages` de `.github/workflows/ci.yml`), así que la versión publicada es siempre la del código de `main`. En el repositorio, **Settings → Pages → Source** tiene que estar en **GitHub Actions**.
  - https://hovanrojasignacio.github.io/TFG/
 
 Para apuntar la interfaz a otro backend, define la variable `VITE_API_BASE` (por ejemplo en `Application/.env`: `VITE_API_BASE=http://192.168.1.50:8000`) antes de ejecutar `npm run dev` o `npm run build`. El backend solo acepta peticiones del navegador desde las direcciones del panel (`http://localhost:5173`, `http://localhost:4173` y la versión de GitHub Pages); si el panel se sirve desde otra dirección, añádela al arrancar el backend con `GUARDWATCH_ORIGINS` (por ejemplo, `$env:GUARDWATCH_ORIGINS = "http://192.168.1.50:5173"`).
@@ -121,7 +118,7 @@ python -m unittest discover -s Inference/tests
 cd Application && npm run lint && npm test && npm run build
 ```
 
-Las pruebas del recuento y de los perfiles solo usan la biblioteca estándar. Las de la API y del pipeline de vídeo (`tests/test_api.py`) usan un modelo simulado, sin GPU ni cámara, pero necesitan los paquetes de `requirements.txt` y `httpx` (`pip install httpx`, no está en `requirements.txt`): ejecútalas con el Python de `Inference/.venv`; sin esos paquetes se omiten. GitHub Actions ejecuta en cada push y pull request el lint, las pruebas y la compilación del panel, y la comprobación de sintaxis y las pruebas del backend que solo usan la biblioteca estándar (`.github/workflows/ci.yml`).
+Las pruebas del recuento y de los perfiles solo usan la biblioteca estándar. Las de la API, del pipeline de vídeo y del motor TensorRT (`tests/test_api.py`, `tests/test_runtime.py`) usan un modelo simulado, sin GPU ni cámara ni PyTorch, pero necesitan FastAPI, Pydantic, NumPy, OpenCV y `httpx` (`pip install httpx`, no está en `requirements.txt`): ejecútalas con el Python de `Inference/.venv`; sin esos paquetes se omiten. GitHub Actions ejecuta en cada push y pull request el lint, las pruebas y la compilación del panel, y la comprobación de sintaxis y todas las pruebas del backend (`.github/workflows/ci.yml`); con cada push a `main`, además, publica el panel.
 
 ## Modos de detección
 
@@ -132,11 +129,11 @@ El panel permite elegir, con el servidor en marcha, qué elementos de protecció
 | Casco | `Inference/profiles/casco/` | casco | YOLO26s de siete clases (persona, cabeza, casco, rostro...) |
 | Casco y chaleco | `Inference/profiles/casco_chaleco/` | casco y chaleco | YOLO26s entrenado con `train.py` sobre el dataset [20250731-PPE2286](https://universe.roboflow.com/ying2001/20250731-ppe2286-m0ega) (ying2001, Roboflow Universe, CC BY 4.0) |
 
-Cada modo es una carpeta con los pesos (`best.pt`) y un `profile.json` que dice qué significa cada clase: a qué elemento se refiere (`item`), si se lleva (`ok`), falta (`missing`), es neutral (`neutral`, se dibuja pero no cuenta) o se ignora (`ignore`), y, en modelos que ven a un mismo operario como persona y como cabeza, su nivel (`level`: `head` o `person`) para contarlo una sola vez. El servidor comprueba al cargar un modo que `profile.json` describe todas las clases del modelo.
+Cada modo es una carpeta con los pesos (`best.pt`, que se descarga la primera vez de la dirección `weights.url` de su `profile.json` y se comprueba con `weights.sha256`) y un `profile.json` que dice qué significa cada clase: a qué elemento se refiere (`item`), si se lleva (`ok`), falta (`missing`), es neutral (`neutral`, se dibuja pero no cuenta) o se ignora (`ignore`), y, en modelos que ven a un mismo operario como persona y como cabeza, su nivel (`level`: `head` o `person`) para contarlo una sola vez. El servidor comprueba al cargar un modo que `profile.json` describe todas las clases del modelo.
 
 - **Modo al arrancar:** `casco`; se cambia con la variable de entorno `GUARDWATCH_PROFILE` (por ejemplo, `$env:GUARDWATCH_PROFILE = "casco_chaleco"`).
 - **Cambio desde el panel:** el modelo nuevo se carga en segundo plano mientras el anterior sigue procesando vídeo. La primera vez que se usa un modo en un equipo se genera su motor TensorRT (alrededor de un minuto, con menos FPS mientras tanto); `python export.py --profile <modo>` lo genera antes. Al cambiar de modo se aplica el umbral de confianza recomendado en su `profile.json` (`conf`), salvo que el operador ya haya movido el deslizador: en ese caso se conserva su valor hasta reiniciar el backend.
-- **Añadir un modo:** entrena el modelo (`python train.py --data dataset.yaml --name <modo>`; si el dataset solo trae train y valid, `split_dataset.py` separa antes un conjunto de prueba), copia `Inference/runs/<modo>/weights/best.pt` a `Inference/profiles/<modo>/` y escribe su `profile.json` tomando como ejemplo los existentes. Aparece en el panel sin reiniciar el servidor.
+- **Añadir un modo:** entrena el modelo (`python train.py --data dataset.yaml --name <modo>`; si el dataset solo trae train y valid, `split_dataset.py` separa antes un conjunto de prueba), copia `Inference/runs/<modo>/weights/best.pt` a `Inference/profiles/<modo>/` y escribe su `profile.json` tomando como ejemplo los existentes. Aparece en el panel sin reiniciar el servidor. Para que otros equipos lo descarguen, sube `best.pt` (con otro nombre, por ejemplo `<modo>.pt`) a una release de GitHub y pon su dirección y su SHA-256 en `weights`.
 - **API:** `GET /api/profiles` (modos, el actual y el que se está cargando) y `POST /api/profiles/select` con `{"id": "casco_chaleco"}` (responde 202 y carga en segundo plano; 400 si el modo no existe, 409 si ya se está cargando otro).
 
 ## Código de Colores de Seguridad
