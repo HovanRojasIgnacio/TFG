@@ -16,15 +16,6 @@ export function getSafetyColor(score) {
   return "#fecaca";
 }
 
-/** Nombre de la cámara que se muestra en el botón de la fuente de vídeo. */
-export function getCameraDisplayName(camera) {
-  if (!camera) return "Cámara no seleccionada";
-  if (camera.type === "local") {
-    return camera.name || `Cámara Local ${camera.index}`;
-  }
-  return camera.name || camera.url;
-}
-
 /** Fecha de hoy como AAAA-MM-DD en hora local (el formato del campo `date` de una infracción). */
 export function localDate(now = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");

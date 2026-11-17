@@ -11,4 +11,7 @@ export const REQUEST_TIMEOUT_MS = 3000;    // Tiempo máximo de una petición a 
                                            // caída sin aviso dejaría la petición pendiente durante minutos)
 // El backend prueba la cámara hasta 11 s (conexión y primer fotograma) antes de responder
 export const CAMERA_SELECT_TIMEOUT_MS = 15000;
+// Umbral que muestra el deslizador hasta la primera respuesta del backend (después manda el del servidor,
+// que es profiles.DEFAULT_CONF o el recomendado por el modo)
 export const DEFAULT_CONF = 0.325;
+export const RECENT_INFRACTIONS = 12;      // Infracciones que muestra la galería antes de «Ver las N guardadas»

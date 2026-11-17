@@ -71,5 +71,39 @@ class EngineIsStaleTest(unittest.TestCase):
         self.assertFalse(runtime.engine_is_stale(self.base))
 
 
+class EnsureWeightsTest(unittest.TestCase):
+    """Descarga de best.pt cuando falta (con una dirección file:// en lugar de la release de GitHub)."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.source = os.path.join(self.dir.name, "publicado.pt")
+        with open(self.source, "wb") as f:
+            f.write(b"pesos publicados")
+        self.url = "file:///" + self.source.replace(os.sep, "/").lstrip("/")
+        self.sha = runtime._weights_digest(self.source)
+        self.base = os.path.join(self.dir.name, "modo")
+        os.mkdir(self.base)
+        self.pt = os.path.join(self.base, "best.pt")
+
+    def test_missing_weights_are_downloaded_and_checked(self):
+        with self.assertLogs("guardwatch", level="INFO"):
+            runtime.ensure_weights(self.base, self.url, self.sha)
+        with open(self.pt, "rb") as f:
+            self.assertEqual(f.read(), b"pesos publicados")
+
+    def test_a_file_with_another_hash_is_not_kept(self):
+        with self.assertLogs("guardwatch", level="INFO"), self.assertRaises(RuntimeError):
+            runtime.ensure_weights(self.base, self.url, "0" * 64)
+        self.assertEqual(os.listdir(self.base), [])  # Ni best.pt ni la descarga a medias
+
+    def test_existing_weights_are_not_downloaded_again(self):
+        with open(self.pt, "wb") as f:
+            f.write(b"locales")
+        runtime.ensure_weights(self.base, "https://no.se.usa/best.pt", self.sha)
+        with open(self.pt, "rb") as f:
+            self.assertEqual(f.read(), b"locales")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,3 +40,35 @@ jobs:
           opencv-python-headless==$(grep -oP '^opencv-python==\K.*' Inference/requirements.txt)
           httpx
       - run: python -m unittest discover -s Inference/tests -v
+
+  # Publica el panel en GitHub Pages con cada push a main que pasa las comprobaciones (sustituye a npm run
+  # deploy). En el repositorio, Settings → Pages → Source tiene que ser «GitHub Actions».
+  deploy-pages:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [frontend, backend-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    defaults:
+      run:
+        working-directory: Application
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Application/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: Application/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4

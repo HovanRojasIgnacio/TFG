@@ -47,3 +47,7 @@ Inference/infractions.json.tmp
 
 # Entrenamientos y separaciones de datasets (rutas locales de cada equipo)
 Inference/runs/
+
+# Pesos de cada modo: se descargan de la release que indica su profile.json (runtime.ensure_weights)
+Inference/profiles/*/best.pt
+Inference/profiles/*/best.pt.download

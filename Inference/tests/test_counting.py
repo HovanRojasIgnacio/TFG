@@ -197,6 +197,21 @@ class ProfileValidationTest(unittest.TestCase):
             with self.subTest(conf=conf), self.assertRaises(ValueError):
                 profiles.parse("x", {**VEST_PROFILE, "conf": conf})
 
+    def test_weights_need_an_https_address_and_a_hash(self):
+        good = {"url": "https://github.com/x/y/releases/download/v1/casco.pt", "sha256": "ab" * 32}
+        parsed = profiles.parse("x", {**VEST_PROFILE, "weights": good})
+        self.assertEqual((parsed.weights_url, parsed.weights_sha256), (good["url"], good["sha256"]))
+        self.assertIsNone(profiles.parse("x", VEST_PROFILE).weights_url)
+        for bad in ({"url": "http://x/best.pt", "sha256": "ab" * 32}, {"url": good["url"]},
+                    {"url": good["url"], "sha256": "xyz"}, {"url": "file:///C:/best.pt", "sha256": "ab" * 32}):
+            with self.subTest(weights=bad), self.assertRaises(ValueError):
+                profiles.parse("x", {**VEST_PROFILE, "weights": bad})
+
+    def test_installed_profiles_are_valid(self):
+        for profile_id in profiles.discover():
+            with self.subTest(profile=profile_id):
+                self.assertIsNotNone(profiles.load(profile_id).weights_url)
+
     def test_only_installed_folders_are_profiles(self):
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, "uno"))

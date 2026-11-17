@@ -1,12 +1,13 @@
-"""Cámaras: detección de las locales, apertura, lectura del último frame y enmascarado de las URL.
+"""Cámaras: detección de las locales, apertura, lectura del último frame, enmascarado de las URL y la cámara que
+lee el bucle de vídeo (CameraManager: cambio de fuente, reconexión y detección de una cámara perdida).
 
-No conoce el pipeline de vídeo ni la API: solo abre cámaras y entrega frames.
+No conoce la detección ni la API: solo abre cámaras y entrega frames.
 """
 import logging
 import re
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from urllib.parse import urlsplit, urlunsplit
 import cv2
 from pydantic import BaseModel
@@ -21,6 +22,12 @@ ALLOWED_IP_SCHEMES = ("http://", "https://", "rtsp://")  # Esquemas admitidos pa
 IP_OPEN_TIMEOUT_MS = 5000  # Tiempo máximo para conectar con una cámara IP
 IP_READ_TIMEOUT_MS = 5000  # Tiempo máximo esperando un frame de una cámara IP
 CAMERA_TEST_TIMEOUT = (IP_OPEN_TIMEOUT_MS + IP_READ_TIMEOUT_MS) / 1000 + 1  # Prueba al cambiar de cámara (s)
+RECONNECT_MIN_DELAY = 2.0   # Espera inicial entre reintentos de conexión (s)
+RECONNECT_MAX_DELAY = 15.0  # Espera máxima entre reintentos (s)
+FRAME_FAIL_TIMEOUT = 2.0    # Segundos sin frames válidos tras los que se da una cámara local por desconectada
+# Las cámaras IP pueden enviar pocos frames (modos de bajo consumo, cámaras de instantáneas, cortes breves de
+# Wi-Fi): se espera al menos el tiempo de lectura de FFmpeg antes de darlas por desconectadas
+IP_FRAME_FAIL_TIMEOUT = IP_READ_TIMEOUT_MS / 1000 + 1
 
 
 # Una clave que contiene alguna de estas partes se considera secreta (password, loginPas, access_token, api_key...)
@@ -55,9 +62,14 @@ def mask_url(url: Optional[str]) -> Optional[str]:
         return "URL no válida"
 
 
+def local_name(index: Optional[int]) -> str:
+    """Nombre por defecto de una cámara local (el único sitio donde se construye)."""
+    return f"Cámara Local {index}"
+
+
 def _camera_entry(index: int, width: int, height: int) -> Dict:
     """Ficha de una cámara local para la lista que ve el panel."""
-    return {"index": index, "name": f"Cámara Local {index}", "type": "local", "width": width, "height": height}
+    return {"index": index, "name": local_name(index), "type": "local", "width": width, "height": height}
 
 
 def _probe_local_camera(index: int) -> Optional[Dict]:
@@ -122,8 +134,13 @@ class CameraSource(BaseModel):
 
 
 def source_label(source: CameraSource) -> str:
-    """Nombre de la cámara para mensajes y registros (sin credenciales)."""
-    return source.name or mask_url(source.url) or f"Cámara Local {source.index}"
+    """Nombre de la cámara para el panel, los mensajes y los registros (sin credenciales)."""
+    return source.name or mask_url(source.url) or local_name(source.index)
+
+
+def same_source(a: Optional[CameraSource], b: Optional[CameraSource]) -> bool:
+    """True si las dos fuentes son la misma cámara (el nombre no cuenta)."""
+    return a is not None and b is not None and (a.type, a.index, a.url) == (b.type, b.index, b.url)
 
 
 def open_capture(source: CameraSource):
@@ -240,3 +257,185 @@ def connect_camera(source: CameraSource, timeout: float = CAMERA_TEST_TIMEOUT):
     if thread.is_alive():
         logger.warning("La prueba de conexión de la cámara superó el tiempo máximo (%ss)", timeout)
     return None
+
+
+class CameraManager:
+    """La cámara que lee el bucle de vídeo: cambio de fuente, reconexión con espera creciente y cámara perdida.
+
+    select() e info() se llaman desde la API; read() y close(), solo desde el hilo de vídeo. `on_switch` se llama
+    (en el hilo de vídeo) cada vez que se empieza a usar otra cámara o se reconecta: lo que se había detectado
+    con la anterior ya no vale.
+    """
+
+    def __init__(self, source: CameraSource, on_switch: Callable[[], None] = lambda: None):
+        self.source = source                 # La cámara elegida (la que muestra el panel)
+        self.error: Optional[str] = None
+        self._on_switch = on_switch
+        self._lock = threading.Lock()
+        self._handover = None                # (fuente, cámara ya abierta) que select deja para read
+        self._retry_requested = False        # select pide reconectar la cámara actual sin esperar
+        # Estado del hilo de vídeo
+        self._cap = None
+        self._current: Optional[CameraSource] = None  # La que read está usando
+        self._next_retry = 0.0
+        self._retry_delay = RECONNECT_MIN_DELAY
+        self._last_frame_time = 0.0
+
+    @property
+    def current(self) -> Optional[CameraSource]:
+        return self._current
+
+    @property
+    def connected(self) -> bool:
+        return self._cap is not None and self._cap.isOpened()
+
+    def select(self, source: CameraSource) -> bool:
+        """Cambia de cámara. Devuelve True si la nueva funciona (se prueba antes de cambiar)."""
+        if same_source(source, self.source):
+            if self.error:
+                # La cámara actual está fallando: elegirla de nuevo pide reconectar ya, sin esperar al
+                # siguiente reintento (que puede tardar hasta RECONNECT_MAX_DELAY)
+                with self._lock:
+                    self._retry_requested = True
+            return True
+
+        # La prueba (con tiempo máximo) se hace fuera del lock para no bloquear el bucle de captura
+        cap = connect_camera(source)
+        if cap is None:
+            return False
+
+        with self._lock:
+            # El hilo de vídeo detecta el cambio, libera la cámara anterior y usa la ya abierta
+            replaced = self._handover
+            self._handover = (source, cap)
+            self.source = source
+            self.error = None
+        if replaced is not None:
+            replaced[1].release()  # Otro cambio anterior que el bucle aún no había recogido
+        return True
+
+    def info(self, force_refresh: bool = False, probe: bool = True) -> Dict:
+        """La cámara elegida, las cámaras locales disponibles y el error actual.
+
+        probe=False devuelve la lista en caché sin abrir ninguna cámara (para el sondeo frecuente).
+        """
+        source = self.source
+        try:
+            if probe:
+                # La cámara local que el bucle tiene abierta no se vuelve a abrir (se interrumpiría). Si no está
+                # abierta (aún no conectó o falló) se sondea como las demás: darla por buena mostraba en la
+                # lista una cámara que no existe
+                in_use = source.type == "local" and self._cap is not None and self.error is None
+                available = detect_local_cameras(force_refresh=force_refresh,
+                                                 skip_index=source.index if in_use else None)
+            else:
+                available = camera_cache["cameras"]
+        except Exception as e:
+            logger.error("Falló la detección de cámaras: %s", e)
+            available = []
+        return {
+            "current": {"type": source.type, "index": source.index, "url": mask_url(source.url),
+                        "name": source_label(source)},
+            "available_local": available,
+            "error": self.error,
+        }
+
+    def read(self):
+        """El siguiente frame, o None si no lo hay (sin cámara, reconectando o un fallo de lectura)."""
+        self._take_request()
+        if not self.connected:
+            self._reconnect()
+            return None
+        return self._read_frame()
+
+    def close(self):
+        self._release()
+
+    def _release(self):
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+            self._cap = None
+
+    def _take_request(self):
+        """Recoge el cambio de cámara o la petición de reconectar que haya dejado select."""
+        # La cámara nueva se abre fuera del lock: abrir una cámara IP puede tardar segundos y el lock no
+        # debe bloquear a select
+        with self._lock:
+            requested = self.source
+            handover, self._handover = self._handover, None
+            retry_now, self._retry_requested = self._retry_requested, False
+        changed = requested is not self._current  # select crea siempre una fuente nueva
+        if retry_now or changed:
+            self._next_retry = 0.0
+            self._retry_delay = RECONNECT_MIN_DELAY
+        if changed:
+            self._current = requested
+            self._release()
+            self._on_switch()  # Los contadores y la ventana de infracciones eran de la cámara anterior
+        if handover is not None:
+            source, cap = handover
+            if source is self._current:
+                self._use(source, cap)
+            else:
+                cap.release()
+
+    def _use(self, source: CameraSource, cap):
+        """Empieza a leer de la cámara ya abierta."""
+        self._cap = LatestFrameReader(cap) if source.type == "ip" else cap
+        self.error = None
+        logger.info("Cámara conectada: %s", source_label(source))
+        self._last_frame_time = time.time()
+        self._on_switch()  # Nada de la cámara anterior debe confirmar una infracción de esta
+
+    def _reconnect(self):
+        """Sin cámara abierta (arranque, cambio, fallo o desconexión): reintento con espera creciente."""
+        if time.time() < self._next_retry:
+            time.sleep(0.5)
+            return
+        source = self._current
+        cap = open_capture(source)
+        if self.source is not source:
+            # Se cambió de cámara mientras se abría esta: se descarta
+            if cap:
+                cap.release()
+            return
+        if cap and cap.isOpened():
+            self._retry_delay = RECONNECT_MIN_DELAY
+            self._use(source, cap)
+            return
+        if cap:
+            try:
+                cap.release()
+            except Exception:
+                pass
+        self.error = f"No se pudo conectar a la cámara: {source_label(source)}"
+        self._next_retry = time.time() + self._retry_delay
+        logger.warning("Cámara no disponible, se reintenta en %.0fs", self._retry_delay)
+        self._retry_delay = min(self._retry_delay * 2, RECONNECT_MAX_DELAY)
+        time.sleep(0.5)
+
+    def _read_frame(self):
+        """Lee un frame. Devuelve None si falla (y libera la cámara si lleva un tiempo sin dar frames)."""
+        try:
+            success, frame = self._cap.read()
+        except Exception as e:
+            logger.error("Falló la lectura de la cámara: %s", e)
+            success, frame = False, None
+        if success and frame is not None:
+            self._last_frame_time = time.time()
+            return frame
+        # Por tiempo y no por número de fallos: en una cámara IP cada lectura fallida puede tardar hasta
+        # IP_READ_TIMEOUT_MS
+        fail_timeout = IP_FRAME_FAIL_TIMEOUT if self._current.type == "ip" else FRAME_FAIL_TIMEOUT
+        if time.time() - self._last_frame_time > fail_timeout:
+            logger.warning("Sin frames durante %.0fs, se libera la cámara", fail_timeout)
+            self._release()
+            self.error = "Error de lectura de cámara - cámara desconectada"
+            self._retry_delay = RECONNECT_MIN_DELAY
+            self._next_retry = time.time() + self._retry_delay  # Se reintenta automáticamente
+        else:
+            time.sleep(0.01)
+        return None
