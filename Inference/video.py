@@ -1,5 +1,4 @@
 """Modelo y bucle de vídeo: carga del detector, lectura de la cámara, detección, conteo y registro."""
-import gc
 import logging
 import os
 import secrets
@@ -11,12 +10,11 @@ from collections import deque
 from typing import Dict, Optional
 import cv2
 import numpy as np
-import torch
 import cameras
 import counting
 import evidence
 import profiles
-from runtime import Runtime, engine_needed, load_model, precision_kwargs
+from runtime import Runtime, engine_needed, free_gpu_memory, load_model, precision_kwargs
 
 logger = logging.getLogger("guardwatch")
 
@@ -355,8 +353,7 @@ class VideoPipeline:
         # Se libera el modelo anterior cuando termina el frame que aún pudiera estar usándolo
         del old
         time.sleep(1.0)
-        gc.collect()
-        torch.cuda.empty_cache()
+        free_gpu_memory()
 
     def _release_cap(self):
         if self._cap is not None:

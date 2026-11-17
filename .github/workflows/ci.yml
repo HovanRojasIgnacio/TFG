@@ -23,14 +23,20 @@ jobs:
       - run: npm test
       - run: npm run build
 
-  # Recuento y perfiles: solo usan la biblioteca estándar, así que no hace falta instalar PyTorch ni una GPU
-  backend-unit-tests:
+  # Recuento, perfiles, API y pipeline de vídeo con un modelo simulado: no hace falta PyTorch ni una GPU
+  backend-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      # Errores de sintaxis en cualquier módulo del backend, sin instalar sus dependencias
+      # Errores de sintaxis en cualquier módulo del backend, incluidos los que las pruebas no importan
       - run: python -m compileall -q Inference
+      # Las versiones de requirements.txt, salvo PyTorch y Ultralytics; OpenCV sin interfaz gráfica
+      - run: >
+          pip install
+          $(grep -E '^(fastapi|uvicorn|numpy|pydantic)==' Inference/requirements.txt)
+          opencv-python-headless==$(grep -oP '^opencv-python==\K.*' Inference/requirements.txt)
+          httpx
       - run: python -m unittest discover -s Inference/tests -v

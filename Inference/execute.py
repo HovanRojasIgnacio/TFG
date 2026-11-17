@@ -133,12 +133,6 @@ def get_cameras(refresh: bool = False):
     return pipeline.get_camera_info(force_refresh=refresh)
 
 
-@app.post("/api/cameras/refresh")
-def refresh_cameras():
-    """Fuerza la actualización de las cámaras disponibles."""
-    return pipeline.get_camera_info(force_refresh=True)
-
-
 @app.post("/api/cameras/select")
 def select_camera(payload: cameras.CameraSource):
     """Cambia a otra fuente de cámara."""

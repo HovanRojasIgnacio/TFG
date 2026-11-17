@@ -42,8 +42,7 @@ def load_models(base_dir):
 
 def fp32_kwargs():
     """Fuerza FP32 en best.pt para que sea una referencia exacta (el motor lleva su precisión dentro)."""
-    from ultralytics.cfg import DEFAULT_CFG_DICT
-    return {"quantize": 32} if "quantize" in DEFAULT_CFG_DICT else {"half": False}
+    return {"quantize": 32}  # La versión de Ultralytics de requirements.txt ya no tiene la opción `half`
 
 
 def validate(model, data, split, **precision):
