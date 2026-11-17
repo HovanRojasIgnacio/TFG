@@ -86,14 +86,21 @@ test('GET se cancela con la señal que se le pasa', async () => {
 });
 
 test('GET lanza un error si la petición tarda más que timeoutMs', async () => {
-  await withFetch(
-    (u, { signal }) => new Promise((_, reject) => {
-      signal.addEventListener('abort', () => reject(signal.reason));
-    }),
-    async () => {
-      await assert.rejects(getJson('/api/stats', { timeoutMs: 30 }), { name: 'TimeoutError' });
-    }
-  );
+  // El temporizador de AbortSignal.timeout no mantiene vivo el proceso: sin otro pendiente, Node 22 da la
+  // prueba por cancelada antes de que caduque la petición («the event loop has already resolved»)
+  const keepAlive = setTimeout(() => {}, 5000);
+  try {
+    await withFetch(
+      (u, { signal }) => new Promise((_, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason));
+      }),
+      async () => {
+        await assert.rejects(getJson('/api/stats', { timeoutMs: 30 }), { name: 'TimeoutError' });
+      }
+    );
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });
 
 test('POST pasa una señal a fetch', async () => {
