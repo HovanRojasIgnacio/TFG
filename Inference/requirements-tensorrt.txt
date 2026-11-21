@@ -6,7 +6,7 @@
 # generar motores con TensorRT 11 (falta EXPLICIT_BATCH); por eso requirements.txt fija 8.4.177.
 tensorrt-cu13==11.4.0.106
 nvidia-modelopt==0.47.0
-onnx==1.21.0
+onnx==1.22.0
 onnxslim==0.1.94
 onnxruntime-gpu==1.31.0
 onnx-graphsurgeon==0.6.1
