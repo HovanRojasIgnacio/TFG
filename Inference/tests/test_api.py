@@ -481,8 +481,11 @@ class CameraTest(PipelineTestCase):
         self.assertIs(self.pipeline.latest_encoded_frame, video.NO_SIGNAL_JPEG)
         self.assertIsNotNone(self.pipeline.camera_error)
         frame_id = self.pipeline.frame_id
-        video.time.sleep(0.6)   # Se publica una vez, no en cada reintento
+        video.time.sleep(0.6)   # No se publica en cada reintento...
         self.assertEqual(self.pipeline.frame_id, frame_id)
+        video.time.sleep(1.0)   # ...pero sí cada segundo, para que el navegador muestre la parte anterior
+        self.assertGreater(self.pipeline.frame_id, frame_id)
+        self.assertIs(self.pipeline.latest_encoded_frame, video.NO_SIGNAL_JPEG)
 
     def test_the_camera_list_shows_only_cameras_that_exist(self):
         self.addCleanup(cameras.camera_cache.update, cameras=[], last_update=0)

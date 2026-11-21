@@ -30,6 +30,9 @@ PROCESSING_ERROR_AFTER = 2.0  # Segundos fallando seguidos tras los que el error
 VIOLATION_WINDOW = 8
 VIOLATION_MIN_FRAMES = 5
 FPS_SMOOTHING = 0.1  # Peso del último frame en la media móvil de los FPS
+# Sin cámara, «SIN IMAGEN» se vuelve a enviar cada tantos segundos: Chromium solo muestra una parte del MJPEG
+# cuando llega el separador de la siguiente, así que una imagen enviada una sola vez no se veía nunca
+NO_SIGNAL_REPEAT = 1.0
 
 STATE_COLORS = {"ok": (0, 255, 0), "missing": (0, 0, 255), "neutral": (0, 165, 255)}  # BGR: verde, rojo, naranja
 
@@ -144,6 +147,7 @@ class VideoPipeline:
 
         self.latest_encoded_frame = None
         self.frame_id: int = 0  # Se incrementa con cada frame nuevo codificado
+        self._no_signal_sent = 0.0  # Última vez que se publicó «SIN IMAGEN»
         self.last_viewer_time: float = 0.0  # Última vez que un cliente pidió un frame del stream
         self.latency_window = deque(maxlen=100)  # ms desde que se lee un frame hasta que queda publicado
         self.lock = threading.Lock()
@@ -296,12 +300,15 @@ class VideoPipeline:
         """Sin cámara, el stream muestra «SIN IMAGEN» en lugar del último frame.
 
         El navegador deja en pantalla el último frame recibido: sin esto, quien miraba el vídeo (o quien se
-        conectara después) seguía viendo a las personas y los recuadros de antes de perder la cámara.
+        conectara después) seguía viendo a las personas y los recuadros de antes de perder la cámara. Se repite
+        cada NO_SIGNAL_REPEAT segundos porque el navegador muestra cada parte al recibir la siguiente.
         """
+        now = time.time()
         with self.lock:
-            if self.latest_encoded_frame is not NO_SIGNAL_JPEG:
+            if self.latest_encoded_frame is not NO_SIGNAL_JPEG or now - self._no_signal_sent >= NO_SIGNAL_REPEAT:
                 self.latest_encoded_frame = NO_SIGNAL_JPEG
                 self.frame_id += 1
+                self._no_signal_sent = now
 
     def _handle_frame(self, frame, source: cameras.CameraSource):
         """Procesa un frame leído: lo analiza, actualiza los FPS y, si falla, deja el error para el panel."""
