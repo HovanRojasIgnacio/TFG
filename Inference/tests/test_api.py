@@ -5,6 +5,7 @@ cargar un modelo); sin ellos se omiten, de modo que `python -m unittest discover
 funcionando solo con la biblioteca estándar.
 """
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -98,9 +99,9 @@ class ViolationConfirmationTest(PipelineTestCase):
         self.assertTrue(self.pipeline.detected.violation_confirmed)
         self.assertEqual(len(self.snapshots()), 1)  # Las siguientes esperan los 4 s entre capturas
         entry = self.pipeline.evidence.log[0]
-        self.assertEqual(entry["details"], "Falta: casco ×1")
-        self.assertRegex(entry["date"], r"^\d{4}-\d{2}-\d{2}$")
-        self.assertRegex(entry["image_path"], r"^/static/infractions/inf_\d+_[0-9a-f]{16}\.jpg$")
+        self.assertEqual(entry.details, "Falta: casco ×1")
+        self.assertRegex(entry.date, r"^\d{4}-\d{2}-\d{2}$")
+        self.assertRegex(entry.image, r"^inf_\d+_[0-9a-f]{16}\.jpg$")
 
     def test_a_missed_frame_does_not_cancel_the_violation(self):
         for detections in (NO_HELMET, NO_HELMET, HELMET, NO_HELMET, NO_HELMET, NO_HELMET):
@@ -153,6 +154,14 @@ class InfractionLogTest(PipelineTestCase):
             f.write("{no es json")
         self.assertEqual(len(self.new_pipeline().evidence.log), 0)
 
+    def test_a_log_from_before_the_file_name_field_is_kept(self):
+        self.record_one()
+        entry = self.pipeline.evidence.log[0]._asdict()
+        entry["image_path"] = f"/static/infractions/{entry.pop('image')}"
+        with open(self.log_file, "w", encoding="utf-8") as f:
+            json.dump([entry], f)
+        self.assertEqual(list(self.new_pipeline().evidence.log), list(self.pipeline.evidence.log))
+
     def test_a_log_that_is_valid_json_but_not_a_list_is_ignored(self):
         # JSON válido pero que no es una lista de infracciones: el servidor debe arrancar igualmente
         for content in ("null", "5", "{}", '"x"', "[1, null, {}]", "[" * 5000):
@@ -182,7 +191,7 @@ class UndeletedSnapshotTest(PipelineTestCase):
         self.now += self.pipeline.evidence.repeat_cooldown + 1
 
     def listed(self):
-        return {os.path.basename(e["image_path"]) for e in self.pipeline.evidence.log}
+        return {e.image for e in self.pipeline.evidence.log}
 
     def test_an_image_whose_eviction_failed_is_removed_at_the_next_cleanup(self):
         self.fill_log_with_a_failed_eviction()
@@ -212,7 +221,7 @@ class UndeletedSnapshotTest(PipelineTestCase):
         for path in extra:
             self.assertTrue(os.path.exists(path))
         self.assertEqual(len(self.snapshots()), 2)  # La suya y la ajena
-        self.assertIn(os.path.basename(self.pipeline.evidence.log[0]["image_path"]), self.snapshots())
+        self.assertIn(self.pipeline.evidence.log[0].image, self.snapshots())
 
     def record_one_more(self):
         """Registra una infracción más (la primera llamada confirma la infracción con varios frames)."""
@@ -244,7 +253,7 @@ class ApiTest(PipelineTestCase):
         self.assertEqual((data["profile_loading"], data["profile_error"]), (None, None))
         self.assertNotIn("infractions", data)  # El registro se pide aparte, solo cuando cambia
         self.assertEqual(data["infractions_total"], 1)
-        self.assertEqual(data["last_infraction_id"], self.pipeline.evidence.log[-1]["id"])
+        self.assertEqual(data["last_infraction_id"], self.pipeline.evidence.log[-1].id)
 
     def test_each_frame_is_followed_by_the_next_part_header(self):
         """Chromium muestra una parte al recibir el separador y las cabeceras de la siguiente."""
@@ -271,7 +280,7 @@ class ApiTest(PipelineTestCase):
         log = self.client.get("/api/infractions").json()["infractions"]
         self.assertEqual(len(log), 15)
         self.assertEqual(log[-1]["id"], stats["last_infraction_id"])
-        self.assertTrue(log[0]["image_url"].startswith("http://localhost/static/infractions/"))
+        self.assertEqual(log[0]["image_url"], f"http://localhost/static/infractions/{log[0]['image']}")
 
     def test_only_this_server_is_answered(self):
         # Una página maliciosa cuyo dominio apunta a 127.0.0.1 (DNS rebinding) llega con su dominio en Host

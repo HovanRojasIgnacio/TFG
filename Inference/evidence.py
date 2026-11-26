@@ -9,15 +9,14 @@ import os
 import secrets
 import time
 from collections import deque
-from typing import Dict, List
+from typing import Dict, List, Mapping, NamedTuple, Optional
 import cv2
 import profiles
 
 logger = logging.getLogger("guardwatch")
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(current_dir, "static")  # Lo que sirve /static (sin autenticación)
-INFRACTIONS_DIR = os.path.join(STATIC_DIR, "infractions")
+INFRACTIONS_DIR = os.path.join(current_dir, "static", "infractions")  # Las capturas (las sirve execute.py)
 # El registro se guarda fuera de /static: contiene los nombres de las capturas, que no deben poder adivinarse
 LOG_FILE = os.path.join(current_dir, "infractions.json")
 LOG_SIZE = 100  # Infracciones que conserva el registro
@@ -26,6 +25,28 @@ SAVE_COOLDOWN = 4.0  # Segundos mínimos entre dos capturas de infracciones
 # SAVE_COOLDOWN llenaba el registro (100 entradas) en menos de siete minutos y borraba todas las anteriores
 REPEAT_COOLDOWN = 60.0
 PURGE_INTERVAL = 3600.0  # Cada cuánto se revisan las capturas antiguas mientras el servidor está en marcha (s)
+
+
+class Infraction(NamedTuple):
+    """Una entrada del registro: así se guarda en infractions.json y así la devuelve la API."""
+    id: int             # Milisegundos desde 1970: único y creciente
+    date: str           # AAAA-MM-DD
+    timestamp: str      # HH:MM:SS
+    confidence: float   # La de la infracción más fiable del frame
+    image: str          # Nombre del archivo de la captura, en la carpeta del EvidenceRecorder
+    profile: str        # Nombre del modo con el que se detectó
+    details: str        # Lo que faltaba, p. ej. "Falta: casco ×1"
+
+    @classmethod
+    def from_json(cls, entry: Mapping) -> Optional["Infraction"]:
+        """La entrada leída de infractions.json, o None si no es una infracción."""
+        try:
+            entry = dict(entry)
+            # Los registros anteriores guardaban la dirección de la captura (/static/infractions/<nombre>)
+            entry.setdefault("image", os.path.basename(str(entry.get("image_path", ""))))
+            return cls(**{field: entry[field] for field in cls._fields})
+        except (TypeError, ValueError, KeyError):
+            return None
 
 
 def missing_details(profile: profiles.Profile, items: Dict[str, Dict[str, int]]) -> str:
@@ -87,8 +108,7 @@ class EvidenceRecorder:
             logger.error("No se pudieron revisar las capturas antiguas: %s", e)
             return
         if removed:
-            self.log = deque((item for item in self.log if os.path.basename(item["image_path"]) not in removed),
-                             maxlen=self.log.maxlen)
+            self.log = deque((i for i in self.log if i.image not in removed), maxlen=self.log.maxlen)
             self._save_log()
 
     def _purge_old_snapshots(self) -> set:
@@ -111,15 +131,15 @@ class EvidenceRecorder:
             logger.info("Borradas %d capturas con más de %g días", len(removed), self.retention_days)
         return removed
 
-    def _load_log(self) -> List[Dict]:
+    def _load_log(self) -> List[Infraction]:
         """Lee el registro de infracciones guardado y descarta las entradas cuya captura ya no existe."""
         try:
             with open(self.log_file, encoding="utf-8") as f:
                 entries = json.load(f)
             if not isinstance(entries, list):
                 raise ValueError("no es una lista")
-            return [e for e in entries if isinstance(e, dict) and os.path.isfile(
-                os.path.join(self.folder, os.path.basename(str(e.get("image_path", "")))))]
+            infractions = (Infraction.from_json(e) for e in entries)
+            return [i for i in infractions if i is not None and os.path.isfile(os.path.join(self.folder, i.image))]
         except FileNotFoundError:
             return []
         except (OSError, ValueError, AttributeError, RecursionError) as e:
@@ -131,7 +151,7 @@ class EvidenceRecorder:
         try:
             tmp = self.log_file + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(list(self.log), f, ensure_ascii=False)
+                json.dump([i._asdict() for i in self.log], f, ensure_ascii=False)
             os.replace(tmp, self.log_file)
         except OSError as e:  # Se ejecuta en el hilo de vídeo: un fallo de disco no debe terminarlo
             logger.error("No se pudo guardar el registro de infracciones: %s", e)
@@ -150,7 +170,7 @@ class EvidenceRecorder:
 
     def _record(self, frame, profile: profiles.Profile, counts, now: float) -> None:
         """Guarda la captura y la añade al registro (si está lleno, borra la más antigua)."""
-        # /static no tiene autenticación: el sufijo aleatorio impide adivinar la dirección de una captura
+        # Las capturas se sirven sin autenticación: el sufijo aleatorio impide adivinar su dirección
         filename = f"inf_{int(now)}_{secrets.token_hex(8)}.jpg"
         filepath = os.path.join(self.folder, filename)
         self._last_save = now
@@ -160,20 +180,20 @@ class EvidenceRecorder:
             return
         # El registro guarda las últimas LOG_SIZE; la imagen de la que sale se borra del disco
         if len(self.log) == self.log.maxlen:
-            evicted = os.path.basename(self.log[0]["image_path"])
+            evicted = self.log[0].image
             try:
                 os.remove(os.path.join(self.folder, evicted))
             except OSError as e:
                 logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
                 self._undeleted.add(evicted)
 
-        self.log.append({
-            "id": int(now * 1000),
-            "date": time.strftime("%Y-%m-%d", time.localtime(now)),
-            "timestamp": time.strftime("%H:%M:%S", time.localtime(now)),
-            "confidence": round(counts.highest_violation, 2),
-            "image_path": f"/static/infractions/{filename}",
-            "profile": profile.name,
-            "details": missing_details(profile, counts.items),
-        })
+        self.log.append(Infraction(
+            id=int(now * 1000),
+            date=time.strftime("%Y-%m-%d", time.localtime(now)),
+            timestamp=time.strftime("%H:%M:%S", time.localtime(now)),
+            confidence=round(counts.highest_violation, 2),
+            image=filename,
+            profile=profile.name,
+            details=missing_details(profile, counts.items),
+        ))
         self._save_log()

@@ -104,8 +104,10 @@ class HostCheckMiddleware:
 
 app.add_middleware(HostCheckMiddleware)
 
-# La carpeta la crea el EvidenceRecorder al arrancar (no está en git): no se comprueba al importar
-app.mount("/static", StaticFiles(directory=evidence.STATIC_DIR, check_dir=False), name="static")
+# Las capturas de las infracciones. La carpeta la crea el EvidenceRecorder al arrancar (no está en git): no se
+# comprueba al importar
+SNAPSHOTS_URL = "/static/infractions"
+app.mount(SNAPSHOTS_URL, StaticFiles(directory=evidence.INFRACTIONS_DIR, check_dir=False), name="snapshots")
 
 
 @app.exception_handler(RequestValidationError)
@@ -200,7 +202,7 @@ def get_infractions(request: Request):
     """
     base_url = str(request.base_url).rstrip("/")
     # Dirección completa de cada imagen, a partir de la de esta petición (sobre copias)
-    return {"infractions": [{**item, "image_url": f"{base_url}{item['image_path']}"}
+    return {"infractions": [{**item._asdict(), "image_url": f"{base_url}{SNAPSHOTS_URL}/{item.image}"}
                             for item in list(pipeline.evidence.log)]}
 
 
@@ -232,7 +234,7 @@ def get_stats():
         "safety_score": counts.safety_score,
         "conf_threshold": pipeline.conf_threshold,
         "infractions_total": len(log),
-        "last_infraction_id": log[-1]["id"] if log else None,
+        "last_infraction_id": log[-1].id if log else None,
         "camera": camera_info["current"],
         "camera_error": pipeline.camera_error
     }
