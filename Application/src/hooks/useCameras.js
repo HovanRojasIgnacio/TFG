@@ -3,28 +3,23 @@ import { CAMERA_SELECT_TIMEOUT_MS } from '../config';
 import { getJson, postJson } from '../lib/api';
 
 /**
- * Lista de cámaras locales y selección de fuente de vídeo (local o IP).
- * `onSelected` se llama cuando el backend acepta el cambio de cámara.
+ * Lista de cámaras locales y selección de fuente de vídeo (local o IP). La cámara actual y su error son de la
+ * telemetría: tras un cambio aceptado se llama a `refresh` (el de useTelemetry) y a `onSelected`.
  */
-export function useCameras(setTelemetry, onSelected) {
+export function useCameras(refresh, onSelected) {
   const [availableCameras, setAvailableCameras] = useState([]);
   const [testingCamera, setTestingCamera] = useState(false);
   // Error del último intento de cambio de cámara. Va aparte de telemetry.camera_error, que el
   // sondeo de /api/stats sobrescribe cada 500 ms con el estado del backend.
   const [selectError, setSelectError] = useState(null);
 
-  // Cámaras disponibles y cámara actual. Se piden al montar y cada vez que se abre el diálogo: si el
-  // backend aún no estaba en marcha al cargar el panel, la lista no se quedaría vacía para siempre.
+  // Cámaras disponibles. Se piden al montar y cada vez que se abre el diálogo: si el backend aún no estaba en
+  // marcha al cargar el panel, la lista no se quedaría vacía para siempre.
   const loadCameras = useCallback(() => {
     getJson("/api/cameras")
-      .then(data => {
-        setAvailableCameras(data.available_local || []);
-        if (data.current) {
-          setTelemetry(prev => ({ ...prev, camera: data.current, camera_error: data.error }));
-        }
-      })
+      .then(data => setAvailableCameras(data.available_local || []))
       .catch(console.error);
-  }, [setTelemetry]);
+  }, []);
 
   useEffect(loadCameras, [loadCameras]);
 
@@ -33,13 +28,13 @@ export function useCameras(setTelemetry, onSelected) {
     setSelectError(null);
     setTestingCamera(true);
     try {
-      const { ok, data } = await postJson("/api/cameras/select", camera, { timeoutMs: CAMERA_SELECT_TIMEOUT_MS });
+      const { ok, detail } = await postJson("/api/cameras/select", camera, { timeoutMs: CAMERA_SELECT_TIMEOUT_MS });
       if (ok) {
-        setTelemetry(prev => ({ ...prev, camera: data.camera, camera_error: null }));
+        await refresh();
         onSelected();
         return;
       }
-      setSelectError(typeof data.detail === "string" ? data.detail : "No se pudo cambiar la cámara");
+      setSelectError(detail ?? "No se pudo cambiar la cámara");
     } catch {
       setSelectError(networkErrorMessage);
     } finally {

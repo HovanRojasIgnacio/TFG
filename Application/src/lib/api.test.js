@@ -47,7 +47,7 @@ test('POST envía el método, el tipo de contenido y el cuerpo en JSON', async (
   let call;
   await withFetch(async (u, options) => { call = { u, options }; return answer(200, { conf_threshold: 0.4 }); }, async () => {
     const result = await postJson('/api/settings', { conf: 0.4 });
-    assert.deepEqual(result, { ok: true, status: 200, data: { conf_threshold: 0.4 } });
+    assert.deepEqual(result, { ok: true, status: 200, data: { conf_threshold: 0.4 }, detail: null });
   });
   assert.equal(call.u, 'http://localhost:8000/api/settings');
   assert.equal(call.options.method, 'POST');
@@ -60,14 +60,21 @@ test('POST con un 400 devuelve ok falso y el detalle del servidor, sin lanzar', 
     const result = await postJson('/api/cameras/select', { type: 'ip' });
     assert.equal(result.ok, false);
     assert.equal(result.status, 400);
-    assert.equal(result.data.detail, "Cámara no válida");
+    assert.equal(result.detail, "Cámara no válida");
+  });
+});
+
+test('un detalle que no es texto (la lista de errores de validación) no se muestra', async () => {
+  await withFetch(async () => answer(422, { detail: [{ loc: ['body', 'conf'], msg: 'x' }] }), async () => {
+    const result = await postJson('/api/settings', { conf: 'x' });
+    assert.equal(result.detail, null);
   });
 });
 
 test('una respuesta que no es JSON da data vacío', async () => {
   await withFetch(async () => answer(502, undefined), async () => {
     const result = await postJson('/api/profiles/select', { id: 'x' });
-    assert.deepEqual(result, { ok: false, status: 502, data: {} });
+    assert.deepEqual(result, { ok: false, status: 502, data: {}, detail: null });
   });
 });
 

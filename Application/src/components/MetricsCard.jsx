@@ -1,8 +1,9 @@
 import { getSafetyColor } from '../lib/telemetry';
 
+// Los valores son undefined hasta la primera respuesta del servidor
 export default function MetricsCard({ isActive, fps, safetyScore, items, itemNames, neutral }) {
   // Una fila por elemento de protección del modo actual (casco, chaleco...), en el orden del perfil
-  const rows = Object.entries(items || {});
+  const rows = Object.entries(items ?? {});
 
   return (
     <section className="card stats-card" aria-labelledby="metrics-title">
@@ -18,14 +19,14 @@ export default function MetricsCard({ isActive, fps, safetyScore, items, itemNam
           <span className="metric-title">
             <abbr title="Fotogramas por segundo">FPS</abbr> Inferencia
           </span>
-          <span className="metric-value text-emerald">{isActive ? fps : 0}</span>
+          <span className="metric-value text-emerald">{isActive ? fps ?? "—" : 0}</span>
         </div>
         <div className="metric-box">
           <span className="metric-title">
             Cumplimiento <abbr title="Equipos de Protección Individual">EPI</abbr>
           </span>
-          <span className="metric-value" style={{ color: getSafetyColor(safetyScore) }}>
-            {safetyScore}%
+          <span className="metric-value" style={safetyScore == null ? undefined : { color: getSafetyColor(safetyScore) }}>
+            {safetyScore == null ? "—" : `${safetyScore}%`}
           </span>
         </div>
       </div>

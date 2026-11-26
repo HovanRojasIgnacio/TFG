@@ -15,8 +15,9 @@ export async function getJson(path, { timeoutMs = REQUEST_TIMEOUT_MS, signal } =
 }
 
 /**
- * Envía `body` como JSON y devuelve { ok, status, data }; `data` es el JSON de la respuesta
- * ({} si no es JSON). Un estado de error (400, 409…) no lanza: solo falla la red o el tiempo.
+ * Envía `body` como JSON y devuelve { ok, status, data, detail }; `data` es el JSON de la respuesta ({} si no es
+ * JSON) y `detail`, el mensaje del servidor para el usuario (null si no hay). Un estado de error (400, 409…) no
+ * lanza: solo falla la red o el tiempo.
  */
 export async function postJson(path, body, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -26,5 +27,5 @@ export async function postJson(path, body, { timeoutMs = REQUEST_TIMEOUT_MS } = 
     signal: withTimeout(timeoutMs)
   });
   const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
+  return { ok: res.ok, status: res.status, data, detail: typeof data.detail === "string" ? data.detail : null };
 }

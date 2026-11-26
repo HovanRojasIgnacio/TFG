@@ -14,6 +14,7 @@ test('la alarma sigue a la infracción confirmada, no a un fotograma suelto', ()
 test('sin violation_confirmed (datos iniciales, antes de la primera respuesta) no hay alarma', () => {
   assert.equal(hasAlarm({ violations: 2 }), false);
   assert.equal(hasAlarm({}), false);
+  assert.equal(hasAlarm(null), false);
 });
 
 test('el color del cumplimiento cambia en 90 y en 60', () => {

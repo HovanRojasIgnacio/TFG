@@ -2,14 +2,13 @@ import { useState, useEffect } from 'react';
 import { getJson, postJson } from '../lib/api';
 
 /**
- * Modos de detección (perfiles) y cambio de modo.
- * La lista de modos instalados se pide a /api/profiles cuando el backend está en línea; el modo actual, el que
- * se está cargando y el error de una carga fallida llegan con la telemetría (`current`, `loading`, `error`).
+ * Modos de detección instalados y cambio de modo. La lista se pide a /api/profiles cuando el backend está en
+ * línea; el modo actual, el que se está cargando y el error de una carga fallida son de la telemetría.
  */
-export function useProfiles(backendOnline, current, loading, error) {
+export function useProfiles(backendOnline) {
   const [profiles, setProfiles] = useState([]);
   // Error del último intento de cambio (petición rechazada o sin conexión); el de una carga fallida en el
-  // backend llega en `error`
+  // backend llega con la telemetría
   const [selectError, setSelectError] = useState(null);
 
   useEffect(() => {
@@ -26,14 +25,12 @@ export function useProfiles(backendOnline, current, loading, error) {
   const selectProfile = async (id) => {
     setSelectError(null);
     try {
-      const { ok, data } = await postJson("/api/profiles/select", { id });
-      if (!ok) {
-        setSelectError(typeof data.detail === "string" ? data.detail : "No se pudo cambiar el modo");
-      }
+      const { ok, detail } = await postJson("/api/profiles/select", { id });
+      if (!ok) setSelectError(detail ?? "No se pudo cambiar el modo");
     } catch {
       setSelectError("Error de conexión al cambiar el modo de detección");
     }
   };
 
-  return { profiles, current, loading, error, selectError, selectProfile };
+  return { profiles, selectError, selectProfile };
 }

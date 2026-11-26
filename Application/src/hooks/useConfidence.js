@@ -3,12 +3,12 @@ import { CONF_DEBOUNCE_MS } from '../config';
 import { postJson } from '../lib/api';
 
 /**
- * Manejador del deslizador de confianza: actualiza la interfaz al instante
- * y envía el valor al backend solo cuando el usuario deja de moverlo.
- * Mientras el valor no está confirmado por el backend, `pendingConf` tiene prioridad
- * sobre el que llega en el sondeo de /api/stats (así el deslizador no salta hacia atrás).
+ * Manejador del deslizador de confianza: actualiza la interfaz al instante y envía el valor al backend solo
+ * cuando el usuario deja de moverlo. Mientras el valor no está en la telemetría, `pendingConf` tiene prioridad
+ * sobre el que llega en el sondeo de /api/stats (así el deslizador no salta hacia atrás); `refresh` es el de
+ * useTelemetry.
  */
-export function useConfidence(setTelemetry) {
+export function useConfidence(refresh) {
   const [pendingConf, setPendingConf] = useState(null);
   const [error, setError] = useState(null);
   const timerRef = useRef(null);
@@ -23,12 +23,11 @@ export function useConfidence(setTelemetry) {
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(async () => {
       try {
-        const { ok, data } = await postJson("/api/settings", { conf: value });
+        const { ok, detail } = await postJson("/api/settings", { conf: value });
         if (ok) {
-          setTelemetry(prev => ({ ...prev, conf_threshold: data.conf_threshold }));
-          setError(null);
+          await refresh();  // La telemetría ya trae el umbral nuevo cuando se suelta el valor pendiente
         } else {
-          setError(typeof data.detail === "string" ? data.detail : "No se pudo cambiar el umbral");
+          setError(detail ?? "No se pudo cambiar el umbral");
         }
       } catch {
         setError("No se pudo cambiar el umbral: sin conexión con el servidor");

@@ -31,10 +31,10 @@ export default function VideoCard({ isActive, onToggleActive, hasInfraction, dev
         </div>
         <div className="header-right">
           <span className="hardware-pill" title="Dispositivo que ejecuta el modelo">
-            <span className="sr-only">Dispositivo: </span>{device}
+            <span className="sr-only">Dispositivo: </span>{device ?? "CONECTANDO…"}
           </span>
           <span className="format-pill" title="Formato del modelo">
-            <span className="sr-only">Formato del modelo: </span>{weightsFormat}
+            <span className="sr-only">Formato del modelo: </span>{weightsFormat ?? "…"}
           </span>
         </div>
       </div>

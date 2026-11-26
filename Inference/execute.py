@@ -225,6 +225,7 @@ def get_stats():
         "violation_confirmed": detected.violation_confirmed,
         "safety_score": counts.safety_score,
         "conf_threshold": pipeline.conf_threshold,
+        "conf_range": [profiles.CONF_MIN, profiles.CONF_MAX],  # Los límites del deslizador del panel
         "infractions_total": len(log),
         "last_infraction_id": log[-1].id if log else None,
         "camera": camera_info["current"],

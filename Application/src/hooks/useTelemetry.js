@@ -1,74 +1,60 @@
-import { useState, useEffect, useRef } from 'react';
-import { POLL_INTERVAL_MS, DEFAULT_CONF } from '../config';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { POLL_INTERVAL_MS } from '../config';
 import { getJson } from '../lib/api';
 
-const INITIAL_TELEMETRY = {
-  fps: 0,
-  device: "CONECTANDO...",
-  weights_format: "DETECTANDO...",
-  profile: null,
-  profile_loading: null,
-  profile_error: null,
-  items: {},
-  neutral: 0,
-  violations: 0,
-  safety_score: 100,
-  conf_threshold: DEFAULT_CONF,
-  infractions_total: 0,
-  last_infraction_id: null,
-  camera: null,
-  camera_error: null
-};
-
 /**
- * Consulta /api/stats periódicamente mientras `isActive` sea true.
- * Cada consulta espera a que termine la anterior, así no se acumulan peticiones si el
- * backend va lento ni una respuesta antigua pisa a una más reciente.
- * `onStats(data)` se llama con cada respuesta (siempre con la última versión de la función).
- * `online` es null hasta la primera respuesta y false si la última consulta falló.
+ * Consulta /api/stats periódicamente mientras `isActive` sea true. Es el único que escribe la telemetría: tras
+ * un cambio (cámara, umbral), quien lo hizo llama a `refresh()` para no esperar a la consulta siguiente.
+ *
+ * Cada consulta del sondeo espera a que termine la anterior, así no se acumulan peticiones si el backend va
+ * lento, y una respuesta más antigua que la última aplicada (refresh puede adelantarse al sondeo) se descarta.
+ * `telemetry` es null hasta la primera respuesta. `online` es null hasta la primera respuesta desde que se
+ * inicia o reanuda la monitorización (los datos de antes de la pausa no son actuales: no deben hacer sonar la
+ * alarma de una infracción antigua) y false si la última consulta falló.
  */
-export function useTelemetry(isActive, onStats) {
-  const [telemetry, setTelemetry] = useState(INITIAL_TELEMETRY);
+export function useTelemetry(isActive) {
+  const [telemetry, setTelemetry] = useState(null);
   const [online, setOnline] = useState(null);
+  const requests = useRef({ sent: 0, applied: 0 });
 
-  const onStatsRef = useRef(onStats);
-  useEffect(() => {
-    onStatsRef.current = onStats;
-  });
+  // Al reanudar, los datos de antes de la pausa dejan de contar como actuales (ajuste de estado durante el render,
+  // el patrón que recomienda React)
+  const [wasActive, setWasActive] = useState(isActive);
+  if (isActive !== wasActive) {
+    setWasActive(isActive);
+    if (isActive) setOnline(null);
+  }
+
+  const refresh = useCallback(async (signal) => {
+    const request = ++requests.current.sent;
+    try {
+      // Además de cancelarse al desmontar, cada consulta caduca (lo hace getJson): si la red cae sin cerrar la
+      // conexión, la petición quedaría pendiente y el sondeo se pararía sin avisar
+      const data = await getJson("/api/stats", { signal });
+      if (request < requests.current.applied) return;
+      requests.current.applied = request;
+      setTelemetry(data);
+      setOnline(true);
+    } catch {
+      if (signal?.aborted || request < requests.current.applied) return;
+      setOnline(false);  // El backend puede estar arrancando o reconectando
+    }
+  }, []);
 
   useEffect(() => {
     if (!isActive) return;
-
     const controller = new AbortController();
     let timer;
-
     const poll = async () => {
-      try {
-        // Además de cancelarse al desmontar, cada consulta caduca (lo hace getJson): si la red cae sin
-        // cerrar la conexión, la petición quedaría pendiente y el sondeo se pararía sin avisar
-        const data = await getJson("/api/stats", { signal: controller.signal });
-        setTelemetry(prev => ({
-          ...prev,
-          ...data,
-          items: data.items && typeof data.items === "object" ? data.items : prev.items
-        }));
-        setOnline(true);
-        onStatsRef.current?.(data);
-      } catch {
-        if (controller.signal.aborted) return;
-        setOnline(false);  // El backend puede estar arrancando o reconectando
-      }
-      if (!controller.signal.aborted) {
-        timer = setTimeout(poll, POLL_INTERVAL_MS);
-      }
+      await refresh(controller.signal);
+      if (!controller.signal.aborted) timer = setTimeout(poll, POLL_INTERVAL_MS);
     };
     poll();
-
     return () => {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [isActive]);
+  }, [isActive, refresh]);
 
-  return [telemetry, setTelemetry, online];
+  return { telemetry, online, refresh };
 }

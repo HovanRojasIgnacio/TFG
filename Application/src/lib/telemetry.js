@@ -3,10 +3,10 @@
 
 /**
  * La alarma (sonido, borde rojo y aviso) responde a la infracción confirmada en varios fotogramas, no a un
- * fotograma suelto.
+ * fotograma suelto. Sin datos (null) no hay alarma.
  */
 export function hasAlarm(data) {
-  return data.violation_confirmed === true;
+  return data?.violation_confirmed === true;
 }
 
 /** Color del porcentaje de cumplimiento, con contraste suficiente sobre la tarjeta (los de App.css). */

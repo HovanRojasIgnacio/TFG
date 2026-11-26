@@ -245,6 +245,7 @@ class ApiTest(PipelineTestCase):
     def test_stats(self):
         empty = self.client.get("/api/stats").json()
         self.assertEqual((empty["infractions_total"], empty["last_infraction_id"]), (0, None))
+        self.assertEqual(empty["conf_range"], [profiles.CONF_MIN, profiles.CONF_MAX])
         for _ in range(video.VIOLATION_MIN_FRAMES):
             self.process(NO_HELMET)
         data = self.client.get("/api/stats").json()

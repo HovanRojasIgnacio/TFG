@@ -20,29 +20,16 @@ function App() {
   const [activeModalImg, setActiveModalImg] = useState(null);
   const [cameraModalOpen, setCameraModalOpen] = useState(false);
 
-  const { soundEnabled, toggleSound, beep } = useAlarm();
+  // `telemetry` es null hasta la primera respuesta de /api/stats
+  const { telemetry, online: backendOnline, refresh } = useTelemetry(isActive);
+  // Solo con datos actuales: en pausa o sin conexión no se avisa de una infracción que quizá ya no está
+  const alarm = isActive && backendOnline === true && hasAlarm(telemetry);
+  const { soundEnabled, toggleSound } = useAlarm(alarm);
 
-  const [telemetry, setTelemetry, backendOnline] = useTelemetry(isActive, (data) => {
-    if (soundEnabled && hasAlarm(data)) {
-      beep();
-    }
-  });
-
-  // Al reanudar, los datos son los de antes de la pausa hasta que llega la primera respuesta: sin esto, la
-  // alarma de una infracción antigua volvería a mostrarse durante ese instante
-  const toggleActive = () => {
-    if (!isActive) {
-      setTelemetry(prev => ({ ...prev, violations: 0, violation_confirmed: false }));
-    }
-    setIsActive(!isActive);
-  };
-
-  const confidence = useConfidence(setTelemetry);
-  const cameras = useCameras(setTelemetry, () => setCameraModalOpen(false));
-  const profiles = useProfiles(
-    backendOnline, telemetry.profile?.id ?? null, telemetry.profile_loading ?? null, telemetry.profile_error ?? null
-  );
-  const infractionLog = useInfractionLog(telemetry.last_infraction_id, telemetry.infractions_total, backendOnline);
+  const confidence = useConfidence(refresh);
+  const cameras = useCameras(refresh, () => setCameraModalOpen(false));
+  const profiles = useProfiles(backendOnline);
+  const infractionLog = useInfractionLog(telemetry?.last_infraction_id, telemetry?.infractions_total, backendOnline);
 
   return (
     <div className="app-container">
@@ -66,7 +53,7 @@ function App() {
           ? "Monitorización en pausa."
           : backendOnline !== true
             ? "Sin datos del servidor."
-            : hasAlarm(telemetry)
+            : alarm
               ? "Atención: falta un elemento de protección en la imagen."
               : "Sin infracciones en la imagen."}
       </p>
@@ -80,37 +67,41 @@ function App() {
       <main className="main-content" id="contenido" tabIndex={-1}>
         <VideoCard
           isActive={isActive}
-          onToggleActive={toggleActive}
-          hasInfraction={isActive && backendOnline === true && hasAlarm(telemetry)}
-          device={telemetry.device}
-          weightsFormat={telemetry.weights_format}
+          onToggleActive={() => setIsActive(!isActive)}
+          hasInfraction={alarm}
+          device={telemetry?.device}
+          weightsFormat={telemetry?.weights_format}
           backendOnline={backendOnline}
         />
 
         <div className="right-panel">
           <ControlPanel
-            confThreshold={confidence.pendingConf ?? telemetry.conf_threshold}
+            confThreshold={confidence.pendingConf ?? telemetry?.conf_threshold}
+            confRange={telemetry?.conf_range}
             onConfidenceChange={confidence.onChange}
             confidenceError={confidence.error}
             soundEnabled={soundEnabled}
             onToggleSound={toggleSound}
-            camera={telemetry.camera}
-            cameraError={telemetry.camera_error}
+            camera={telemetry?.camera}
+            cameraError={telemetry?.camera_error}
             onOpenCameraModal={() => {
               cameras.loadCameras();
               setCameraModalOpen(true);
             }}
-            profiles={profiles}
+            profiles={profiles.profiles}
+            currentProfile={telemetry?.profile?.id}
+            loadingProfile={telemetry?.profile_loading}
+            profileError={telemetry?.profile_error || profiles.selectError}
             onSelectProfile={profiles.selectProfile}
             profilesPaused={!isActive}
           />
           <MetricsCard
             isActive={isActive}
-            fps={telemetry.fps}
-            safetyScore={telemetry.safety_score}
-            items={telemetry.items}
-            itemNames={telemetry.profile?.items}
-            neutral={telemetry.neutral}
+            fps={telemetry?.fps}
+            safetyScore={telemetry?.safety_score}
+            items={telemetry?.items}
+            itemNames={telemetry?.profile?.items}
+            neutral={telemetry?.neutral}
           />
         </div>
       </main>
@@ -132,7 +123,7 @@ function App() {
       {cameraModalOpen && (
         <CameraModal
           cameras={cameras.availableCameras}
-          currentCamera={telemetry.camera}
+          currentCamera={telemetry?.camera}
           testing={cameras.testingCamera}
           error={cameras.selectError}
           onRefresh={cameras.refreshCameras}

@@ -1,8 +1,11 @@
-import { DEFAULT_CONF } from '../config';
 import ErrorMessage from './ErrorMessage';
+
+// Paso del deslizador; los límites (profiles.CONF_MIN y CONF_MAX) llegan del servidor en conf_range
+const CONF_STEP = 0.025;
 
 export default function ControlPanel({
   confThreshold,
+  confRange,
   onConfidenceChange,
   soundEnabled,
   onToggleSound,
@@ -11,14 +14,15 @@ export default function ControlPanel({
   confidenceError,
   onOpenCameraModal,
   profiles,
+  currentProfile,
+  loadingProfile,
+  profileError,
   onSelectProfile,
   profilesPaused
 }) {
-  const conf = confThreshold ?? DEFAULT_CONF;
-  const loadingProfile = profiles.loading
-    ? profiles.profiles.find(p => p.id === profiles.loading)?.name ?? profiles.loading
-    : null;
-  const profileError = profiles.error || profiles.selectError;
+  // Hasta la primera respuesta del servidor no se conocen el umbral ni sus límites
+  const confKnown = confThreshold != null && confRange != null;
+  const loadingName = loadingProfile ? profiles.find(p => p.id === loadingProfile)?.name ?? loadingProfile : null;
 
   return (
     <section className="card config-card" aria-labelledby="console-title">
@@ -31,12 +35,12 @@ export default function ControlPanel({
           id="profile-select"
           className="mode-select"
           aria-describedby="profile-help"
-          value={profiles.loading ?? profiles.current ?? ""}
-          disabled={profilesPaused || !!profiles.loading || profiles.profiles.length === 0}
+          value={loadingProfile ?? currentProfile ?? ""}
+          disabled={profilesPaused || !!loadingProfile || profiles.length === 0}
           onChange={(e) => onSelectProfile(e.target.value)}
         >
-          {profiles.profiles.length === 0 && <option value="">Sin conexión</option>}
-          {profiles.profiles.map(p => (
+          {profiles.length === 0 && <option value="">Sin conexión</option>}
+          {profiles.map(p => (
             <option key={p.id} value={p.id}>{p.name}</option>
           ))}
         </select>
@@ -44,8 +48,8 @@ export default function ControlPanel({
           {/* En pausa no llega la telemetría, que es la que dice cuándo termina la carga de un modo */}
           {profilesPaused
             ? "Reanuda la monitorización para cambiar de modo."
-            : loadingProfile
-              ? `Cargando modelo «${loadingProfile}»… (la primera vez tarda alrededor de un minuto)`
+            : loadingName
+              ? `Cargando modelo «${loadingName}»… (la primera vez tarda alrededor de un minuto)`
               : "Elementos de protección que se comprueban."}
         </p>
         {profileError && <ErrorMessage>{profileError}</ErrorMessage>}
@@ -54,17 +58,18 @@ export default function ControlPanel({
       <div className="control-group">
         <div className="slider-header">
           <label className="control-label" htmlFor="confidence-slider">Umbral de Confianza:</label>
-          <span className="slider-value">{conf.toFixed(3)}</span>
+          <span className="slider-value">{confKnown ? confThreshold.toFixed(3) : "—"}</span>
         </div>
         <input
           id="confidence-slider"
           aria-describedby="confidence-help"
-          aria-valuetext={`${Math.round(conf * 100)} por ciento`}
+          aria-valuetext={confKnown ? `${Math.round(confThreshold * 100)} por ciento` : "Sin datos del servidor"}
           type="range"
-          min="0.10"
-          max="0.95"
-          step="0.025"
-          value={conf}
+          min={confRange?.[0]}
+          max={confRange?.[1]}
+          step={CONF_STEP}
+          value={confThreshold ?? ""}
+          disabled={!confKnown}
           onChange={onConfidenceChange}
           className="modern-slider"
         />
