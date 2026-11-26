@@ -1,4 +1,4 @@
-"""Pruebas de la comprobación del motor TensorRT (runtime.engine_is_stale), sin GPU ni TensorRT.
+"""Pruebas de los pesos y del motor TensorRT (runtime.py), sin GPU, PyTorch ni TensorRT.
 
 Necesitan NumPy (lo importa runtime.py); sin él se omiten.
 """
@@ -19,7 +19,9 @@ except ImportError as e:
 THIS_PC = {"gpu": "NVIDIA GeForce RTX 5070 Ti", "tensorrt": "11.4.0.106"}
 
 
-class EngineIsStaleTest(unittest.TestCase):
+class ModeFolderTestCase(unittest.TestCase):
+    """La carpeta de un modo con su best.pt, en un equipo con la GPU y el TensorRT de THIS_PC."""
+
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
@@ -28,11 +30,12 @@ class EngineIsStaleTest(unittest.TestCase):
         self.engine = os.path.join(self.base, "best.engine")
         with open(self.pt, "wb") as f:
             f.write(b"pesos")
-        with open(self.engine, "wb") as f:
-            f.write(b"motor")
-        patcher = mock.patch.object(runtime, "_build_environment", return_value=dict(THIS_PC))
-        patcher.start()
+        self.patch(runtime, "_build_environment", return_value=dict(THIS_PC))
+
+    def patch(self, target, name, **kwargs):
+        patcher = mock.patch.object(target, name, **kwargs)
         self.addCleanup(patcher.stop)
+        return patcher.start()
 
     def write_source(self, content):
         with open(self.engine + ".source", "w", encoding="utf-8") as f:
@@ -40,6 +43,19 @@ class EngineIsStaleTest(unittest.TestCase):
 
     def signature(self, **changes):
         return {"weights_sha256": runtime._weights_digest(self.pt), **THIS_PC, **changes}
+
+    def write_engine(self, **changes):
+        """Lo que deja build_engine: best.engine y su anotación (changes: de otros pesos, otra GPU u otro TensorRT)."""
+        with open(self.engine, "wb") as f:
+            f.write(b"motor")
+        self.write_source(self.signature(**changes))
+
+
+class EngineIsStaleTest(ModeFolderTestCase):
+    def setUp(self):
+        super().setUp()
+        with open(self.engine, "wb") as f:
+            f.write(b"motor")
 
     def test_same_weights_gpu_and_tensorrt_is_current(self):
         self.write_source(self.signature())
@@ -69,6 +85,83 @@ class EngineIsStaleTest(unittest.TestCase):
     def test_no_engine_is_not_stale(self):
         os.remove(self.engine)
         self.assertFalse(runtime.engine_is_stale(self.base))
+
+
+class LoadModelTest(ModeFolderTestCase):
+    """Qué pesos elige load_model según el estado de best.engine, con la carga y la generación simuladas."""
+
+    def setUp(self):
+        super().setUp()
+        self.patch(runtime, "require_cuda")
+        self.patch(runtime, "_load", side_effect=self.fake_load)
+        self.logger = self.patch(runtime, "logger")
+        self.can_build = True      # False: como sin TensorRT, el motor no se puede generar
+        self.builds = 0
+        self.engine_failures = 0   # Veces que best.engine no carga (otra GPU u otro TensorRT)
+
+    def fake_load(self, path):
+        if path == self.engine and self.engine_failures:
+            self.engine_failures -= 1
+            raise RuntimeError("motor incompatible")
+        return runtime.Model(None, path, half=path.endswith(".pt"))
+
+    def build(self, base_dir):
+        self.assertEqual(base_dir, self.base)
+        self.builds += 1
+        if self.can_build:
+            self.write_engine()
+        return self.can_build
+
+    def load(self):
+        return runtime.load_model(self.base, self.build)
+
+    def assertLoaded(self, path, builds):
+        model = self.load()
+        self.assertEqual((model.weights_path, model.half, self.builds), (path, path == self.pt, builds))
+
+    def test_a_current_engine_is_loaded_without_building(self):
+        self.write_engine()
+        self.assertLoaded(self.engine, builds=0)
+
+    def test_a_missing_engine_is_built_and_loaded(self):
+        self.assertLoaded(self.engine, builds=1)
+
+    def test_without_an_engine_best_pt_runs_in_fp16(self):
+        self.can_build = False
+        self.assertLoaded(self.pt, builds=1)
+
+    def test_a_stale_engine_is_rebuilt(self):
+        self.write_engine(gpu="NVIDIA GeForce RTX 5060")
+        self.assertLoaded(self.engine, builds=1)
+
+    def test_a_stale_engine_that_cannot_be_rebuilt_is_not_used(self):
+        # Si no, el servidor ejecutaría el modelo anterior a best.pt
+        self.write_engine(weights_sha256="0" * 64)
+        self.can_build = False
+        self.assertLoaded(self.pt, builds=1)
+        warnings = " ".join(str(c.args) for c in self.logger.warning.call_args_list)
+        self.assertIn("se usa best.pt para no ejecutar el modelo anterior", warnings)
+
+    def test_an_engine_that_does_not_load_is_rebuilt_once(self):
+        self.write_engine()
+        self.engine_failures = 1
+        self.assertLoaded(self.engine, builds=1)
+
+    def test_an_engine_that_still_does_not_load_gives_best_pt(self):
+        self.write_engine()
+        self.engine_failures = 2
+        self.assertLoaded(self.pt, builds=1)
+
+    def test_an_engine_without_best_pt_is_used(self):
+        self.write_engine()
+        os.remove(self.pt)
+        self.assertLoaded(self.engine, builds=0)
+
+    def test_no_weights_is_an_error(self):
+        os.remove(self.pt)
+        self.can_build = False
+        with self.assertRaises(FileNotFoundError):
+            self.load()
 
 
 class EnsureWeightsTest(unittest.TestCase):

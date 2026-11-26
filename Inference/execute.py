@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 import cameras
 import evidence
 import profiles
+import runtime
 import video
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -213,8 +214,8 @@ def get_stats():
         "processing_ms": processing_ms,
         "processing_p95_ms": processing_p95_ms,
         "fps": round(pipeline.fps, 1),
-        "device": detector.runtime.device.upper(),
-        "weights_format": detector.weights_format,
+        "device": runtime.DEVICE.upper(),
+        "weights_format": detector.model.weights_format,
         "profile": detector.summary(),
         "profile_loading": pipeline.profile_loading,  # Id del modo que se está cargando, o None
         "profile_error": pipeline.profile_error,

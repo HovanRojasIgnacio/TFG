@@ -24,35 +24,29 @@ from ultralytics import YOLO
 
 import counting
 import profiles
-from runtime import build_engine, detect, engine_is_stale, require_cuda
+from runtime import Model, build_engine, engine_path, ensure_engine, pt_path, require_cuda
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
 
 def load_models(base_dir):
+    """best.pt en FP32, para que sea una referencia exacta, y el motor actual (lleva su precisión dentro)."""
     require_cuda()
-    pt = os.path.join(base_dir, "best.pt")
-    engine = os.path.join(base_dir, "best.engine")
+    pt, engine = pt_path(base_dir), engine_path(base_dir)
     if not os.path.exists(pt):
         raise SystemExit(f"Falta {pt}: es la referencia de la comparación.")
-    if (not os.path.exists(engine) or engine_is_stale(base_dir)) and not build_engine(base_dir):
+    if not ensure_engine(base_dir, build_engine):
         raise SystemExit("No hay un best.engine actual y no se pudo generar (¿falta requirements-tensorrt.txt?).")
-    return YOLO(pt, task="detect"), YOLO(engine, task="detect")
+    return Model(YOLO(pt, task="detect"), pt, half=False), Model(YOLO(engine, task="detect"), engine, half=False)
 
 
-def fp32_kwargs():
-    """Fuerza FP32 en best.pt para que sea una referencia exacta (el motor lleva su precisión dentro)."""
-    return {"quantize": 32}  # La versión de Ultralytics de requirements.txt ya no tiene la opción `half`
-
-
-def validate(model, data, split, **precision):
+def validate(model, data, split):
     # batch=1 en ambos para comparar con la misma geometría de imagen (el motor dinámico se generó con batch 1)
-    return model.val(data=data, split=split, imgsz=640, batch=1, device=0, plots=False, verbose=False, **precision)
+    return model.yolo.val(data=data, split=split, imgsz=640, batch=1, device=0, plots=False, verbose=False)
 
 
 def report_map(pt_model, engine_model, data, split):
-    results = {"best.pt": validate(pt_model, data, split, **fp32_kwargs()),
-               "best.engine": validate(engine_model, data, split)}
+    results = {"best.pt": validate(pt_model, data, split), "best.engine": validate(engine_model, data, split)}
     print(f"\nValidación en '{split}' de {data}\n")
     print(f"{'modelo':14} {'precisión':>10} {'recall':>8} {'mAP50':>8} {'mAP50-95':>9}")
     for name, r in results.items():
@@ -69,9 +63,9 @@ def report_map(pt_model, engine_model, data, split):
         print(f"{names[int(cls)]:22} {pt_v:>8.3f} {en_v:>8.3f} {en_v - pt_v:>+8.3f}")
 
 
-def _predict(model, path, conf, **precision):
+def _predict(model, path, conf):
     """[(clase, confianza, recuadro)] con la misma inferencia que el servidor."""
-    return list(zip(*detect(model, path, conf, **precision)))
+    return list(zip(*model.detect(path, conf)))
 
 
 def _is_violation(profile, dets):
@@ -90,7 +84,7 @@ def report_agreement(profile, pt_model, engine_model, folder):
     conf_diffs = []
     total_ref = 0
     for path in images:
-        ref = _predict(pt_model, path, threshold, **fp32_kwargs())  # best.pt en FP32 (referencia)
+        ref = _predict(pt_model, path, threshold)  # best.pt en FP32 (referencia)
         out = _predict(engine_model, path, threshold)
         total_ref += len(ref)
         used = set()

@@ -1,8 +1,9 @@
-"""Carga del modelo en la GPU, compartida por execute.py y benchmark.py. Solo GPU: no hay modo CPU.
+"""El modelo en la GPU: descarga de los pesos, motor TensorRT, carga e inferencia. Solo GPU: no hay modo CPU.
 
-Orden de preferencia (siempre en la GPU NVIDIA):
-  1. best.engine (TensorRT). Si no existe, o no se puede cargar (otra GPU, otra versión de
-     TensorRT...), se genera automáticamente a partir de best.pt (tarda aproximadamente un minuto).
+Lo usan el servidor (video.py) y las herramientas (benchmark.py, validate_model.py, export.py y las de
+Documentation/tools), así que todas cargan e infieren igual. Orden de preferencia (siempre en la GPU NVIDIA):
+  1. best.engine (TensorRT). Si falta, se generó a partir de otros pesos, en otra GPU o con otro TensorRT, o no
+     se puede cargar, se genera de nuevo a partir de best.pt (tarda aproximadamente un minuto).
   2. best.pt (PyTorch en FP16), si TensorRT no está instalado o la generación falla.
 """
 import gc
@@ -14,19 +15,27 @@ import os
 import shutil
 import tempfile
 import urllib.request
-from typing import List, NamedTuple, Optional
+from typing import Any, Callable, List, NamedTuple, Optional
 
 import numpy as np
 
 logger = logging.getLogger("guardwatch")
 
 IMGSZ = 640
+DEVICE = "cuda"
+FP16 = {"quantize": 16}  # La versión de Ultralytics de requirements.txt usa `quantize` (la opción `half` ya no existe)
+
+# Genera best.engine en la carpeta de un modo y devuelve True si lo logra: build_engine, o la función de video.py
+# que lo genera en otro proceso con el servidor en marcha
+Builder = Callable[[str], bool]
 
 
-class Runtime(NamedTuple):
-    weights_path: str
-    device: str      # siempre "cuda"
-    half: bool       # FP16 (solo con pesos .pt; un motor TensorRT ya lleva la precisión dentro)
+def pt_path(base_dir: str) -> str:
+    return os.path.join(base_dir, "best.pt")
+
+
+def engine_path(base_dir: str) -> str:
+    return os.path.join(base_dir, "best.engine")
 
 
 def require_cuda() -> None:
@@ -46,14 +55,6 @@ def free_gpu_memory() -> None:
     torch.cuda.empty_cache()
 
 
-def precision_kwargs(half: bool) -> dict:
-    """Argumentos de precisión para predict()/export() en FP16. Con FP32 o con un motor TensorRT, ninguno.
-
-    La versión de Ultralytics de requirements.txt usa `quantize` (la opción `half` ya no existe).
-    """
-    return {"quantize": 16} if half else {}
-
-
 class Detections(NamedTuple):
     """Los recuadros de una imagen, en listas paralelas."""
     names: List[str]          # Clase de cada recuadro
@@ -61,19 +62,32 @@ class Detections(NamedTuple):
     coords: List[List[int]]   # x1, y1, x2, y2 en píxeles enteros: los que se dibujan y se cuentan
 
 
-def detect(model, image, conf: float, half: bool = False, device: str = "cuda", **precision) -> Detections:
-    """Inferencia de una imagen como la hace el servidor; las herramientas de evaluación usan esta misma función.
+class Model(NamedTuple):
+    """Un modelo YOLO con sus pesos y su precisión: la inferencia es la misma en el servidor y en las herramientas."""
+    yolo: Any            # ultralytics.YOLO
+    weights_path: str
+    half: bool           # FP16 (best.pt en el servidor). Con False, FP32; un motor TensorRT lleva su precisión dentro
 
-    Una sola copia GPU -> CPU por imagen en lugar de tres por recuadro. precision sustituye a los argumentos de
-    half (validate_model.py fuerza FP32 en best.pt).
-    """
-    boxes = model.predict(image, device=device, conf=conf, verbose=False,
-                          **(precision or precision_kwargs(half)))[0].boxes
-    return Detections([model.names[c] for c in boxes.cls.int().tolist()], boxes.conf.tolist(),
-                      boxes.xyxy.int().tolist())
+    @property
+    def names(self):
+        return self.yolo.names
+
+    @property
+    def weights_format(self) -> str:
+        """ENGINE o PT, para el panel."""
+        return os.path.basename(self.weights_path).split(".")[-1].upper()
+
+    def predict(self, image, conf: float):
+        return self.yolo.predict(image, device=DEVICE, conf=conf, verbose=False, **(FP16 if self.half else {}))
+
+    def detect(self, image, conf: float) -> Detections:
+        """Los recuadros de una imagen, con una sola copia GPU -> CPU por imagen en lugar de tres por recuadro."""
+        boxes = self.predict(image, conf)[0].boxes
+        return Detections([self.names[c] for c in boxes.cls.int().tolist()], boxes.conf.tolist(),
+                          boxes.xyxy.int().tolist())
 
 
-def _tensorrt_available() -> bool:
+def tensorrt_available() -> bool:
     return importlib.util.find_spec("tensorrt") is not None
 
 
@@ -92,7 +106,7 @@ def ensure_weights(base_dir: str, url: Optional[str], sha256: Optional[str]) -> 
     El archivo se descarga aparte y solo se coloca si su SHA-256 es el que indica profile.json: una descarga
     cortada o un archivo cambiado en el servidor no deja unos pesos rotos o distintos en la carpeta.
     """
-    pt = os.path.join(base_dir, "best.pt")
+    pt = pt_path(base_dir)
     if os.path.exists(pt) or not url:
         return
     logger.info("Descargando los pesos del modo desde %s (unos 20 MB)...", url)
@@ -144,12 +158,11 @@ def build_engine(base_dir: str) -> bool:
     Las formas dinámicas son necesarias: un motor estático 640x640 cambia el relleno de la imagen y
     pierde detecciones respecto a best.pt.
     """
-    pt = os.path.join(base_dir, "best.pt")
-    engine = os.path.join(base_dir, "best.engine")
+    pt, engine = pt_path(base_dir), engine_path(base_dir)
     if not os.path.exists(pt):
         logger.warning("No se puede generar el motor TensorRT: falta %s", pt)
         return False
-    if not _tensorrt_available():
+    if not tensorrt_available():
         logger.warning("No se puede generar el motor TensorRT: TensorRT no está instalado "
                        "(pip install -r requirements-tensorrt.txt)")
         return False
@@ -160,8 +173,7 @@ def build_engine(base_dir: str) -> bool:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_pt = os.path.join(tmp, "best.pt")
             shutil.copy2(pt, tmp_pt)
-            built = YOLO(tmp_pt).export(format="engine", device=0, dynamic=True, batch=1,
-                                        imgsz=IMGSZ, **precision_kwargs(True))
+            built = YOLO(tmp_pt).export(format="engine", device=0, dynamic=True, batch=1, imgsz=IMGSZ, **FP16)
             staged = engine + ".tmp"
             shutil.copy2(built, staged)
             os.replace(staged, engine)
@@ -186,7 +198,7 @@ def engine_is_stale(base_dir: str) -> bool:
     anterior, y un motor copiado de un equipo con otra GPU se cargaría aunque TensorRT avisa de que puede ir
     más lento, dar errores o bloquearse.
     """
-    pt, engine = os.path.join(base_dir, "best.pt"), os.path.join(base_dir, "best.engine")
+    pt, engine = pt_path(base_dir), engine_path(base_dir)
     if not (os.path.exists(pt) and os.path.exists(engine)):
         return False
     try:
@@ -197,70 +209,56 @@ def engine_is_stale(base_dir: str) -> bool:
     return built_with != _engine_signature(pt)
 
 
-def engine_needed(base_dir: str) -> bool:
-    """True si load_model() tendría que generar el motor TensorRT (falta o no corresponde a best.pt)."""
-    pt, engine = os.path.join(base_dir, "best.pt"), os.path.join(base_dir, "best.engine")
-    if not (os.path.exists(pt) and _tensorrt_available()):
-        return False
-    return not os.path.exists(engine) or engine_is_stale(base_dir)
+def ensure_engine(base_dir: str, build: Builder) -> bool:
+    """True si hay un best.engine actual (véase engine_is_stale); si falta o es antiguo, lo genera con build.
+
+    Un motor sin best.pt se da por actual: no hay pesos con los que compararlo.
+    """
+    if not os.path.exists(engine_path(base_dir)):
+        return build(base_dir)
+    if not engine_is_stale(base_dir):
+        return True
+    logger.warning("best.engine no se generó a partir del best.pt actual")
+    if build(base_dir):
+        return True
+    logger.warning("No se regeneró el motor; se usa best.pt para no ejecutar el modelo anterior")
+    return False
 
 
-def _load(path: str):
-    """Carga los pesos y hace una inferencia de prueba para detectar motores incompatibles."""
+def _load(path: str) -> Model:
+    """Carga los pesos (best.pt en FP16) y hace una inferencia de prueba, que detecta motores incompatibles y
+    sirve de warm-up."""
     from ultralytics import YOLO
-    model = YOLO(path, task="detect")
-    blank = np.zeros((480, 640, 3), dtype=np.uint8)
-    model.predict(blank, device="cuda", conf=0.325, verbose=False,
-                  **precision_kwargs(path.endswith(".pt")))
+    model = Model(YOLO(path, task="detect"), path, half=path.endswith(".pt"))
+    model.predict(np.zeros((480, 640, 3), dtype=np.uint8), conf=0.325)
     return model
 
 
-def _engine_ready(base_dir: str, build: bool) -> bool:
-    """Decide si se puede usar best.engine: lo genera si falta (y build lo permite) y no admite uno antiguo."""
-    engine = os.path.join(base_dir, "best.engine")
-    if not os.path.exists(engine):
-        if build:
-            build_engine(base_dir)
-    elif engine_is_stale(base_dir):
-        logger.warning("best.engine no se generó a partir del best.pt actual")
-        if not (build and build_engine(base_dir)):
-            logger.warning("No se regeneró el motor; se usa best.pt para no ejecutar el modelo anterior")
-            return False
-    return os.path.exists(engine)
-
-
-def _load_engine(base_dir: str, build: bool):
-    """Carga best.engine y, si no carga y build lo permite, lo regenera una vez. Devuelve (modelo, Runtime) o None."""
-    engine = os.path.join(base_dir, "best.engine")
+def _try_load_engine(base_dir: str) -> Optional[Model]:
     try:
-        return _load(engine), Runtime(engine, "cuda", False)
+        return _load(engine_path(base_dir))
     except Exception as e:
         logger.warning("El motor TensorRT no se pudo cargar (¿otra GPU o versión de TensorRT?): %s", e)
-    if build and build_engine(base_dir):
-        try:
-            return _load(engine), Runtime(engine, "cuda", False)
-        except Exception as e2:
-            logger.warning("El motor regenerado tampoco se pudo cargar: %s", e2)
-    return None
+        return None
 
 
-def load_model(base_dir: str, build: bool = True):
-    """Devuelve (modelo, Runtime) con el mejor formato disponible para la GPU.
+def load_model(base_dir: str, build: Builder = build_engine) -> Model:
+    """El modelo de un modo en el mejor formato disponible para la GPU: best.engine o, si no, best.pt en FP16.
 
-    build=False no genera nunca el motor en este proceso (congelaría el vídeo de un servidor en marcha): si
-    falta, es antiguo o no se puede cargar, se usa best.pt.
+    build genera el motor cuando falta, es antiguo o no carga (en este caso, una sola vez). Por defecto se genera
+    en este proceso; con el servidor en marcha, video.py lo genera en otro para no congelar el vídeo.
     """
     require_cuda()
-    if _engine_ready(base_dir, build):
-        loaded = _load_engine(base_dir, build)
-        if loaded:
-            return loaded
+    if ensure_engine(base_dir, build):
+        model = _try_load_engine(base_dir)
+        if model is None and build(base_dir):
+            model = _try_load_engine(base_dir)
+        if model is not None:
+            return model
 
-    pt = os.path.join(base_dir, "best.pt")
-    if os.path.exists(pt):
-        logger.info("Usando best.pt en la GPU (FP16).")
-        return _load(pt), Runtime(pt, "cuda", True)
-
-    raise FileNotFoundError(
-        f"No hay pesos utilizables en {base_dir}: se necesita best.pt (o best.engine) y una GPU con CUDA."
-    )
+    pt = pt_path(base_dir)
+    if not os.path.exists(pt):
+        raise FileNotFoundError(
+            f"No hay pesos utilizables en {base_dir}: se necesita best.pt (o best.engine) y una GPU con CUDA.")
+    logger.info("Usando best.pt en la GPU (FP16).")
+    return _load(pt)

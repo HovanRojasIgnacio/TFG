@@ -24,7 +24,7 @@ try:
     import evidence
     import profiles
     import video
-    from runtime import Runtime
+    from runtime import Model
 except ImportError as e:  # Entorno sin las dependencias del servidor (solo la biblioteca estándar)
     raise unittest.SkipTest(f"faltan las dependencias del servidor: {e}")
 
@@ -74,7 +74,7 @@ class PipelineTestCase(unittest.TestCase):
         self.now = 1_000_000.0
 
     def new_pipeline(self):
-        detector = video.Detector(profiles.load("casco_chaleco"), self.model, Runtime("best.pt", "cuda", False))
+        detector = video.Detector(profiles.load("casco_chaleco"), Model(self.model, "best.pt", False))
         return video.VideoPipeline(detector, start=False)
 
     def process(self, detections, seconds=0.1):
@@ -319,7 +319,7 @@ class ProfileChangeTest(PipelineTestCase):
     def casco_detector(self, *_args, **_kwargs):
         model = FakeModel()
         model.names = CASCO_NAMES
-        return video.Detector(profiles.load("casco"), model, Runtime("best.pt", "cuda", False))
+        return video.Detector(profiles.load("casco"), Model(model, "best.pt", False))
 
     def load(self, profile_id, loader):
         with mock.patch.object(video, "load_detector", loader), mock.patch.object(video.time, "sleep"), \

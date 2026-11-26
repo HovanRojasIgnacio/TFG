@@ -26,6 +26,7 @@ from ultralytics import YOLO
 
 import counting
 import profiles
+from runtime import Model
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
@@ -49,13 +50,11 @@ def main():
     images = sorted(p for p in glob.glob(os.path.join(args.images, "**", "*"), recursive=True)
                     if p.lower().endswith(IMAGE_EXTENSIONS))
     random.Random(0).shuffle(images)
-    model = YOLO(args.weights, task="detect")
+    model = Model(YOLO(args.weights, task="detect"), args.weights, half=False)  # FP32
     profile = profiles.load("casco")
     frames = []
     for path in images[:args.count]:
-        boxes = model.predict(path, device="cuda", conf=args.conf, verbose=False)[0].boxes
-        coords, confs = boxes.xyxy.int().tolist(), boxes.conf.tolist()
-        names = [model.names[c] for c in boxes.cls.int().tolist()]
+        names, confs, coords = model.detect(path, args.conf)
         result = counting.count(profile, names, confs, coords)
         frames.append({"names": names, "confs": confs, "boxes": coords,
                        "counts": _legacy(result), "highest": result.highest_violation, "flags": result.flags})

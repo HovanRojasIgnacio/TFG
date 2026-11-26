@@ -12,14 +12,14 @@ import os
 import venv_bootstrap
 venv_bootstrap.setup(__name__ == "__main__")
 import profiles
-from runtime import build_engine, ensure_weights, require_cuda
+from runtime import build_engine, engine_path, ensure_weights, pt_path, require_cuda
 
 
 def export_profile(profile_id: str, onnx: bool = False) -> None:
     profile = profiles.load(profile_id)
     base_dir = profile.base_dir
     ensure_weights(base_dir, profile.weights_url, profile.weights_sha256)
-    weights_path = os.path.join(base_dir, "best.pt")
+    weights_path = pt_path(base_dir)
     if not os.path.exists(weights_path):
         raise SystemExit(f"[ERROR]: No se encontró 'best.pt' en {base_dir}")
     require_cuda()
@@ -32,7 +32,7 @@ def export_profile(profile_id: str, onnx: bool = False) -> None:
     # Mismo procedimiento que usa el servidor cuando falta best.engine (formas dinámicas, FP16)
     print("--- GENERANDO EL MOTOR TENSORRT ---")
     if build_engine(base_dir):
-        print(f"[OK]: {os.path.join(base_dir, 'best.engine')}")
+        print(f"[OK]: {engine_path(base_dir)}")
     else:
         print("[AVISO]: No se pudo generar el motor TensorRT (¿falta pip install -r requirements-tensorrt.txt?). "
               "El servidor usará best.pt en la GPU.")

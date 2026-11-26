@@ -16,7 +16,8 @@ import cameras
 import counting
 import evidence
 import profiles
-from runtime import Runtime, detect, engine_needed, ensure_weights, free_gpu_memory, load_model
+from runtime import (DEVICE, Builder, Model, build_engine, ensure_weights, free_gpu_memory, load_model, pt_path,
+                     tensorrt_available)
 
 logger = logging.getLogger("guardwatch")
 
@@ -56,9 +57,9 @@ class Detector:
     referencia: el frame en curso termina con el detector anterior y el siguiente ya usa el nuevo.
     """
 
-    def __init__(self, profile: profiles.Profile, model, runtime: Runtime):
+    def __init__(self, profile: profiles.Profile, model: Model):
         profiles.check_model(profile, model.names)
-        self.profile, self.model, self.runtime = profile, model, runtime
+        self.profile, self.model = profile, model
         self.styles = {}  # Color BGR y texto de la etiqueta de cada clase que se dibuja
         for name, rule in profile.classes.items():
             if rule.state == "ignore":
@@ -70,10 +71,6 @@ class Detector:
                 text = f"OK: {label}" if rule.state == "ok" else f"PELIGRO: Sin {label}"
             self.styles[name] = (STATE_COLORS[rule.state], text)
 
-    @property
-    def weights_format(self) -> str:
-        return os.path.basename(self.runtime.weights_path).split(".")[-1].upper()
-
     def summary(self) -> Dict:
         return {"id": self.profile.id, "name": self.profile.name, "items": self.profile.items}
 
@@ -81,40 +78,40 @@ class Detector:
 def _check_weights(profile: profiles.Profile) -> None:
     """Descarga best.pt si falta y comprueba que profile.json describe sus clases antes de generar el motor."""
     ensure_weights(profile.base_dir, profile.weights_url, profile.weights_sha256)
-    pt = os.path.join(profile.base_dir, "best.pt")
+    pt = pt_path(profile.base_dir)
     if os.path.exists(pt):
         from ultralytics import YOLO
         profiles.check_model(profile, YOLO(pt, task="detect").names)  # Solo lee los pesos en la CPU
 
 
-def _build_engine_apart(base_dir: str) -> None:
-    """Genera el motor TensorRT en otro proceso.
+def _build_engine_apart(base_dir: str) -> bool:
+    """runtime.build_engine en otro proceso (un runtime.Builder). Devuelve True si genera el motor.
 
     Con el servidor en marcha, la exportación (ONNX, ModelOpt) dentro de este proceso compite por el GIL con el
-    hilo de vídeo y lo congela varios segundos. Si falla, load_model(build=False) usa best.pt.
+    hilo de vídeo y lo congela varios segundos. Si falla, load_model usa best.pt.
     """
+    if not (os.path.exists(pt_path(base_dir)) and tensorrt_available()):
+        return False  # Fallaría enseguida: no merece la pena arrancar otro proceso con PyTorch y Ultralytics
+    logger.info("Generando el motor TensorRT de %s en otro proceso (tarda aproximadamente un minuto)...",
+                os.path.basename(base_dir))
     code = "import sys, runtime; sys.exit(0 if runtime.build_engine(sys.argv[1]) else 1)"
     result = subprocess.run([sys.executable, "-c", code, base_dir], cwd=current_dir)
     if result.returncode != 0:
         logger.warning("No se pudo generar el motor de %s en otro proceso (código %s)", base_dir, result.returncode)
+    return result.returncode == 0
 
 
-def load_detector(profile_id: str, build_apart: bool = False) -> Detector:
+def load_detector(profile_id: str, build: Builder = build_engine) -> Detector:
     """Carga el perfil y su modelo en la GPU: motor TensorRT (se genera la primera vez, ~1 min) o best.pt.
 
-    build_apart: generar el motor, si hace falta, en otro proceso (al cambiar de modo con el vídeo en marcha).
-    load_model() ya hace una inferencia de prueba, que sirve de warm-up (véase runtime.py).
+    build genera el motor si hace falta: en este proceso al arrancar el servidor, y con _build_engine_apart al
+    cambiar de modo con el vídeo en marcha. load_model() ya hace una inferencia de prueba, que sirve de warm-up.
     """
     profile = profiles.load(profile_id)
     _check_weights(profile)
-    if build_apart and engine_needed(profile.base_dir):
-        logger.info("Generando el motor TensorRT de %s en otro proceso (tarda aproximadamente un minuto)...",
-                    profile.name)
-        _build_engine_apart(profile.base_dir)
-    model, runtime = load_model(profile.base_dir, build=not build_apart)
-    detector = Detector(profile, model, runtime)
+    detector = Detector(profile, load_model(profile.base_dir, build))
     logger.info("Perfil: %s | modelo: %s | dispositivo: %s | FP16: %s", profile.name,
-                os.path.basename(runtime.weights_path), runtime.device, runtime.half)
+                os.path.basename(detector.model.weights_path), DEVICE, detector.model.half)
     return detector
 
 
@@ -211,7 +208,7 @@ class VideoPipeline:
 
     def _load_profile(self, profile_id: str):
         try:
-            new = load_detector(profile_id, build_apart=True)
+            new = load_detector(profile_id, build=_build_engine_apart)
         except Exception as e:
             # Se conserva el modelo actual: el panel muestra el error y el vídeo no se interrumpe
             logger.exception("No se pudo cargar el modo %s", profile_id)
@@ -239,8 +236,7 @@ class VideoPipeline:
 
         # Una sola lectura por frame: si se cambia de modo a mitad, este frame termina con el detector anterior
         detector = self.detector
-        names, confs, coords = detect(detector.model, frame, self.conf_threshold, detector.runtime.half,
-                                      detector.runtime.device)
+        names, confs, coords = detector.model.detect(frame, self.conf_threshold)
 
         # Cada operario cuenta una vez aunque el modelo lo marque como persona, cabeza y casco
         counts = counting.count(detector.profile, names, confs, coords)

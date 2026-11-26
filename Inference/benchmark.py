@@ -17,7 +17,7 @@ import numpy as np
 import torch
 
 import profiles
-from runtime import load_model, precision_kwargs
+from runtime import DEVICE, load_model
 
 
 def frame_source(source, total: int):
@@ -60,13 +60,14 @@ def main():
     # Misma carga que execute.py (solo GPU; genera el motor TensorRT si falta)
     profile = profiles.load(args.profile)
     conf = args.conf or profile.threshold
-    model, (weights, device, half) = load_model(profile.base_dir)
-    print(f"Modo: {profile.name} | Modelo: {os.path.basename(weights)} | Dispositivo: {device} ({torch.cuda.get_device_name(0)}) | half={half}")
+    model = load_model(profile.base_dir)
+    print(f"Modo: {profile.name} | Modelo: {os.path.basename(model.weights_path)} | Dispositivo: {DEVICE} "
+          f"({torch.cuda.get_device_name(0)}) | half={model.half}")
 
     latencies = []
     for i, frame in enumerate(frame_source(args.source, args.warmup + args.frames)):
         start = time.perf_counter()
-        model.predict(frame, device=device, conf=conf, verbose=False, **precision_kwargs(half))
+        model.predict(frame, conf)
         elapsed = (time.perf_counter() - start) * 1000
         if i >= args.warmup:
             latencies.append(elapsed)
