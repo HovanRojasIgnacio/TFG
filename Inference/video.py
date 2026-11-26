@@ -16,7 +16,7 @@ import cameras
 import counting
 import evidence
 import profiles
-from runtime import Runtime, engine_needed, ensure_weights, free_gpu_memory, load_model, precision_kwargs
+from runtime import Runtime, detect, engine_needed, ensure_weights, free_gpu_memory, load_model
 
 logger = logging.getLogger("guardwatch")
 
@@ -129,7 +129,7 @@ class VideoPipeline:
     def __init__(self, detector: Detector, start: bool = True):
         """start=False no arranca el hilo de vídeo (pruebas que llaman a _process_frame directamente)."""
         self.detector = detector
-        self.conf_threshold: float = detector.profile.conf or profiles.DEFAULT_CONF
+        self.conf_threshold: float = detector.profile.threshold
         self.conf_set_by_user = False  # El operador movió el umbral: cambiar de modo ya no lo sustituye
         self.fps: float = 0.0
         self.items: Dict[str, Dict[str, int]] = counting.empty_items(detector.profile)
@@ -239,18 +239,8 @@ class VideoPipeline:
 
         # Una sola lectura por frame: si se cambia de modo a mitad, este frame termina con el detector anterior
         detector = self.detector
-        results = detector.model.predict(
-            frame,
-            device=detector.runtime.device,
-            conf=self.conf_threshold,
-            verbose=False,
-            **precision_kwargs(detector.runtime.half)
-        )
-
-        boxes = results[0].boxes
-        # Una sola copia GPU -> CPU por frame en lugar de tres por caja
-        coords, confs = boxes.xyxy.int().tolist(), boxes.conf.tolist()
-        names = [detector.model.names[c] for c in boxes.cls.int().tolist()]
+        names, confs, coords = detect(detector.model, frame, self.conf_threshold, detector.runtime.half,
+                                      detector.runtime.device)
 
         # Cada operario cuenta una vez aunque el modelo lo marque como persona, cabeza y casco
         counts = counting.count(detector.profile, names, confs, coords)

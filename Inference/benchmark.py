@@ -59,7 +59,7 @@ def main():
 
     # Misma carga que execute.py (solo GPU; genera el motor TensorRT si falta)
     profile = profiles.load(args.profile)
-    conf = args.conf or profile.conf or 0.325
+    conf = args.conf or profile.threshold
     model, (weights, device, half) = load_model(profile.base_dir)
     print(f"Modo: {profile.name} | Modelo: {os.path.basename(weights)} | Dispositivo: {device} ({torch.cuda.get_device_name(0)}) | half={half}")
 

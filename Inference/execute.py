@@ -232,7 +232,8 @@ def get_stats():
 
 
 # Separador y cabeceras de una parte del MJPEG; cada frame se envía seguido de los de la parte siguiente
-PART_HEADER = b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+BOUNDARY = "frame"
+PART_HEADER = f"--{BOUNDARY}\r\nContent-Type: image/jpeg\r\n\r\n".encode()
 
 
 async def stream_generator():
@@ -264,7 +265,7 @@ async def stream_generator():
 
 @app.get("/api/stream")
 async def video_feed():
-    return StreamingResponse(stream_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
+    return StreamingResponse(stream_generator(), media_type=f"multipart/x-mixed-replace; boundary={BOUNDARY}")
 
 
 if __name__ == "__main__":

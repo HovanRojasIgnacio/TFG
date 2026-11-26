@@ -14,7 +14,7 @@ import os
 import shutil
 import tempfile
 import urllib.request
-from typing import NamedTuple, Optional
+from typing import List, NamedTuple, Optional
 
 import numpy as np
 
@@ -52,6 +52,25 @@ def precision_kwargs(half: bool) -> dict:
     La versión de Ultralytics de requirements.txt usa `quantize` (la opción `half` ya no existe).
     """
     return {"quantize": 16} if half else {}
+
+
+class Detections(NamedTuple):
+    """Los recuadros de una imagen, en listas paralelas."""
+    names: List[str]          # Clase de cada recuadro
+    confs: List[float]
+    coords: List[List[int]]   # x1, y1, x2, y2 en píxeles enteros: los que se dibujan y se cuentan
+
+
+def detect(model, image, conf: float, half: bool = False, device: str = "cuda", **precision) -> Detections:
+    """Inferencia de una imagen como la hace el servidor; las herramientas de evaluación usan esta misma función.
+
+    Una sola copia GPU -> CPU por imagen en lugar de tres por recuadro. precision sustituye a los argumentos de
+    half (validate_model.py fuerza FP32 en best.pt).
+    """
+    boxes = model.predict(image, device=device, conf=conf, verbose=False,
+                          **(precision or precision_kwargs(half)))[0].boxes
+    return Detections([model.names[c] for c in boxes.cls.int().tolist()], boxes.conf.tolist(),
+                      boxes.xyxy.int().tolist())
 
 
 def _tensorrt_available() -> bool:

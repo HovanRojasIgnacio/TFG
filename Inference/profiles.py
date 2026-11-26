@@ -56,6 +56,11 @@ class Profile(NamedTuple):
     def rule(self, class_name: str) -> ClassRule:
         return self.classes[class_name]
 
+    @property
+    def threshold(self) -> float:
+        """Umbral con el que se usa el modo: el recomendado en profile.json o, si no hay, DEFAULT_CONF."""
+        return self.conf or DEFAULT_CONF
+
 
 def discover(profiles_dir: str = PROFILES_DIR) -> Dict[str, str]:
     """Perfiles instalados: {id: carpeta}. Solo cuentan las carpetas con profile.json."""

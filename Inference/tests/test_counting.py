@@ -193,6 +193,9 @@ class ProfileValidationTest(unittest.TestCase):
     def test_threshold_must_be_within_the_slider_range(self):
         self.assertEqual(profiles.parse("x", {**VEST_PROFILE, "conf": 0.35}).conf, 0.35)
         self.assertIsNone(profiles.parse("x", VEST_PROFILE).conf)
+        # El umbral de uso: el recomendado o, si no hay, el de por defecto
+        self.assertEqual(profiles.parse("x", {**VEST_PROFILE, "conf": 0.35}).threshold, 0.35)
+        self.assertEqual(profiles.parse("x", VEST_PROFILE).threshold, profiles.DEFAULT_CONF)
         for conf in (5, -1, 0, "0.5", True):
             with self.subTest(conf=conf), self.assertRaises(ValueError):
                 profiles.parse("x", {**VEST_PROFILE, "conf": conf})
