@@ -574,6 +574,19 @@ class CameraTest(PipelineTestCase):
         self.assertEqual(self.pipeline.camera.info(probe=False)["current"]["name"], "Cámara Local 2")
 
 
+class BackoffTest(unittest.TestCase):
+    def test_the_wait_doubles_up_to_the_maximum_and_restarts(self):
+        backoff = cameras.Backoff()
+        self.assertTrue(backoff.due)
+        self.assertEqual([backoff.failed() for _ in range(5)], [2.0, 4.0, 8.0, 15.0, 15.0])
+        self.assertFalse(backoff.due)
+        backoff.restart()
+        self.assertTrue(backoff.due)
+        self.assertEqual(backoff.failed(), 2.0)
+        backoff.restart(wait=True)  # Cámara perdida: el primer reintento espera la mínima
+        self.assertFalse(backoff.due)
+
+
 class MaskUrlTest(unittest.TestCase):
     def test_credentials_never_leave_the_server(self):
         cases = {

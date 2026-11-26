@@ -59,6 +59,16 @@ def mask_url(url: Optional[str]) -> Optional[str]:
         return "URL no válida"
 
 
+def release(cap) -> None:
+    """Cierra una cámara (VideoCapture o LatestFrameReader); un fallo del driver al cerrarla no se propaga."""
+    if cap is None:
+        return
+    try:
+        cap.release()
+    except Exception as e:
+        logger.debug("Falló el cierre de la cámara: %s", e)
+
+
 def local_name(index: Optional[int]) -> str:
     """Nombre por defecto de una cámara local (el único sitio donde se construye)."""
     return f"Cámara Local {index}"
@@ -83,11 +93,7 @@ def _probe_local_camera(index: int) -> Optional[Dict]:
         logger.warning("Error al detectar la cámara %s: %s", index, e)
         return None
     finally:
-        if cap:
-            try:
-                cap.release()
-            except Exception:
-                pass
+        release(cap)
 
 
 def detect_local_cameras(max_cameras: int = 5, skip_index: Optional[int] = None) -> List[Dict]:
@@ -187,7 +193,7 @@ class LatestFrameReader:
             logger.error("Falló la lectura de la cámara IP: %s", e)
         finally:
             # Se libera en este hilo para no cerrar la cámara a mitad de una lectura
-            self._cap.release()
+            release(self._cap)
 
     def isOpened(self) -> bool:
         return not self._stopped and self._cap.isOpened()
@@ -229,8 +235,7 @@ def connect_camera(source: CameraSource, timeout: float = CAMERA_TEST_TIMEOUT):
                 result["cap"] = cap
                 return
         # Fallo, o la prueba ya se dio por perdida: nadie más va a usar esta cámara
-        if cap is not None:
-            cap.release()
+        release(cap)
 
     thread = threading.Thread(target=connect, daemon=True)
     thread.start()
@@ -243,6 +248,29 @@ def connect_camera(source: CameraSource, timeout: float = CAMERA_TEST_TIMEOUT):
     if thread.is_alive():
         logger.warning("La prueba de conexión de la cámara superó el tiempo máximo (%ss)", timeout)
     return None
+
+
+class Backoff:
+    """Cuándo se vuelve a intentar conectar: tras cada fallo la espera se duplica, de RECONNECT_MIN_DELAY a
+    RECONNECT_MAX_DELAY."""
+
+    def __init__(self):
+        self.restart()
+
+    def restart(self, wait: bool = False) -> None:
+        """Vuelve a la espera mínima. Se intenta ya, o tras esa espera si wait=True."""
+        self.delay = RECONNECT_MIN_DELAY
+        self.next_try = time.time() + self.delay if wait else 0.0
+
+    def failed(self) -> float:
+        """Un intento ha fallado: el siguiente espera `delay`, que se duplica. Devuelve la espera."""
+        wait, self.delay = self.delay, min(self.delay * 2, RECONNECT_MAX_DELAY)
+        self.next_try = time.time() + wait
+        return wait
+
+    @property
+    def due(self) -> bool:
+        return time.time() >= self.next_try
 
 
 class CameraManager:
@@ -268,8 +296,7 @@ class CameraManager:
         # Estado del hilo de vídeo
         self._cap = None
         self._current: Optional[CameraSource] = None  # La que read está usando
-        self._next_retry = 0.0
-        self._retry_delay = RECONNECT_MIN_DELAY
+        self._backoff = Backoff()
         self._last_frame_time = 0.0
 
     @property
@@ -302,7 +329,7 @@ class CameraManager:
             self.source = source
             self.error = None
         if replaced is not None:
-            replaced[1].release()  # Otro cambio anterior que el bucle aún no había recogido
+            release(replaced[1])  # Otro cambio anterior que el bucle aún no había recogido
         return True
 
     def info(self, force_refresh: bool = False, probe: bool = True) -> Dict:
@@ -351,12 +378,8 @@ class CameraManager:
         self._release()
 
     def _release(self):
-        if self._cap is not None:
-            try:
-                self._cap.release()
-            except Exception:
-                pass
-            self._cap = None
+        release(self._cap)
+        self._cap = None
 
     def _take_request(self):
         """Recoge el cambio de cámara o la petición de reconectar que haya dejado select."""
@@ -368,52 +391,43 @@ class CameraManager:
             retry_now, self._retry_requested = self._retry_requested, False
         changed = requested is not self._current  # select crea siempre una fuente nueva
         if retry_now or changed:
-            self._next_retry = 0.0
-            self._retry_delay = RECONNECT_MIN_DELAY
+            self._backoff.restart()
         if changed:
+            # Hasta que _use conecte la nueva no hay frames (y el bucle borra lo detectado con la anterior)
             self._current = requested
             self._release()
-            self._on_switch()  # Los contadores y la ventana de infracciones eran de la cámara anterior
         if handover is not None:
             source, cap = handover
             if source is self._current:
                 self._use(source, cap)
             else:
-                cap.release()
+                release(cap)
 
     def _use(self, source: CameraSource, cap):
-        """Empieza a leer de la cámara ya abierta."""
+        """Empieza a leer de la cámara ya abierta (la única entrada a una cámara nueva o reconectada)."""
         self._cap = LatestFrameReader(cap) if source.type == "ip" else cap
         self.error = None
+        self._backoff.restart()
         logger.info("Cámara conectada: %s", source_label(source))
         self._last_frame_time = time.time()
         self._on_switch()  # Nada de la cámara anterior debe confirmar una infracción de esta
 
     def _reconnect(self):
         """Sin cámara abierta (arranque, cambio, fallo o desconexión): reintento con espera creciente."""
-        if time.time() < self._next_retry:
+        if not self._backoff.due:
             time.sleep(0.5)
             return
         source = self._current
         cap = open_capture(source)
         if self.source is not source:
-            # Se cambió de cámara mientras se abría esta: se descarta
-            if cap:
-                cap.release()
+            release(cap)  # Se cambió de cámara mientras se abría esta: se descarta
             return
-        if cap and cap.isOpened():
-            self._retry_delay = RECONNECT_MIN_DELAY
+        if cap is not None and cap.isOpened():
             self._use(source, cap)
             return
-        if cap:
-            try:
-                cap.release()
-            except Exception:
-                pass
+        release(cap)
         self.error = f"No se pudo conectar a la cámara: {source_label(source)}"
-        self._next_retry = time.time() + self._retry_delay
-        logger.warning("Cámara no disponible, se reintenta en %.0fs", self._retry_delay)
-        self._retry_delay = min(self._retry_delay * 2, RECONNECT_MAX_DELAY)
+        logger.warning("Cámara no disponible, se reintenta en %.0fs", self._backoff.failed())
         time.sleep(0.5)
 
     def _read_frame(self):
@@ -433,8 +447,7 @@ class CameraManager:
             logger.warning("Sin frames durante %.0fs, se libera la cámara", fail_timeout)
             self._release()
             self.error = "Error de lectura de cámara - cámara desconectada"
-            self._retry_delay = RECONNECT_MIN_DELAY
-            self._next_retry = time.time() + self._retry_delay  # Se reintenta automáticamente
+            self._backoff.restart(wait=True)  # Se reintenta automáticamente
         else:
             time.sleep(0.01)
         return None
