@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 from collections import deque
-from typing import Dict, Optional
+from typing import NamedTuple, Optional
 import cv2
 import numpy as np
 import cameras
@@ -26,6 +26,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 VIEWER_TIMEOUT = 2.0  # Segundos sin pedir frames tras los que se deja de codificar el stream
 PROCESSING_ERROR = "Error al procesar el vídeo (detalles en el registro del servidor)"
 PROCESSING_ERROR_AFTER = 2.0  # Segundos fallando seguidos tras los que el error se muestra en el panel
+ERROR_LOG_INTERVAL = 10.0  # Segundos entre dos registros de un fallo que se repite en cada frame
 # Una infracción se confirma cuando aparece en VIOLATION_MIN_FRAMES de los últimos VIOLATION_WINDOW frames: un
 # falso positivo de un solo frame no guarda una captura ni hace sonar la alarma, y un parpadeo no la anula
 VIOLATION_WINDOW = 8
@@ -70,9 +71,6 @@ class Detector:
                 label = rule.label or profile.items[rule.item]
                 text = f"OK: {label}" if rule.state == "ok" else f"PELIGRO: Sin {label}"
             self.styles[name] = (STATE_COLORS[rule.state], text)
-
-    def summary(self) -> Dict:
-        return {"id": self.profile.id, "name": self.profile.name, "items": self.profile.items}
 
 
 def _check_weights(profile: profiles.Profile) -> None:
@@ -119,25 +117,64 @@ class ProfileBusy(Exception):
     """Ya se está cargando otro modo de detección."""
 
 
+class Detected(NamedTuple):
+    """Lo que contó el último frame y el modo que lo contó.
+
+    Se sustituye entero, así /api/stats lo lee de una vez: no puede mezclar los contadores de dos frames, ni los
+    de un modo con el nombre de otro.
+    """
+    profile: profiles.Profile
+    counts: counting.Counts
+    violation_confirmed: bool  # Infracción presente en varios frames seguidos (alarma)
+
+    @classmethod
+    def nothing(cls, profile: profiles.Profile) -> "Detected":
+        return cls(profile, counting.Counts.empty(profile), False)
+
+
+class FailureStreak:
+    """Fallos seguidos al procesar frames (CUDA, TensorRT, OpenCV...).
+
+    Se registra como mucho uno cada ERROR_LOG_INTERVAL segundos y, si la racha dura más de PROCESSING_ERROR_AFTER,
+    failing pasa a True y el panel muestra el error.
+    """
+
+    def __init__(self):
+        self._since: Optional[float] = None  # Primer fallo de la racha
+        self._last_log = 0.0
+        self.failing = False
+
+    def failed(self, now: float) -> None:
+        """Anota un fallo. Se llama desde el except, así que registra la excepción que se está tratando."""
+        if now - self._last_log > ERROR_LOG_INTERVAL:
+            logger.exception("Error al procesar un frame; se continúa con el siguiente")
+            self._last_log = now
+        if self._since is None:
+            self._since = now
+        elif now - self._since > PROCESSING_ERROR_AFTER:
+            self.failing = True
+
+    def succeeded(self) -> None:
+        """El procesamiento funciona (o se ha recuperado): la racha termina."""
+        self._since, self.failing = None, False
+
+
 class VideoPipeline:
     """Bucle de vídeo: lee la cámara (cameras.CameraManager), detecta y cuenta, guarda las evidencias
     (evidence.EvidenceRecorder) y publica el frame anotado para el stream."""
 
     def __init__(self, detector: Detector, start: bool = True):
         """start=False no arranca el hilo de vídeo (pruebas que llaman a _process_frame directamente)."""
-        self.detector = detector
-        self.conf_threshold: float = detector.profile.threshold
-        self.conf_set_by_user = False  # El operador movió el umbral: cambiar de modo ya no lo sustituye
-        self.fps: float = 0.0
-        self.items: Dict[str, Dict[str, int]] = counting.empty_items(detector.profile)
-        self.neutral: int = 0
-        self.violations: int = 0
-        self.safety_score: int = 100
-        self.violation_confirmed: bool = False  # Infracción presente en varios frames seguidos (alarma)
-        self._recent_violations = deque(maxlen=VIOLATION_WINDOW)  # ¿Hubo infracción en cada frame reciente?
+        # Protege el modo: el detector, lo que contó (detected, la ventana de infracciones y el episodio de las
+        # evidencias), que cambian a la vez, y el estado de la carga de otro modo
         self._profile_lock = threading.Lock()
+        self.detector = detector
+        self.detected = Detected.nothing(detector.profile)
+        self._recent_violations = deque(maxlen=VIOLATION_WINDOW)  # ¿Hubo infracción en cada frame reciente?
         self.profile_loading: Optional[str] = None  # Modo que se está cargando en segundo plano
         self.profile_error: Optional[str] = None    # Error de la última carga fallida
+        self.user_conf: Optional[float] = None  # Umbral que fijó el operador; None: el recomendado del modo
+        self.fps: float = 0.0
 
         self.latest_encoded_frame = None
         self.frame_id: int = 0  # Se incrementa con cada frame nuevo codificado
@@ -145,9 +182,7 @@ class VideoPipeline:
         self.latency_window = deque(maxlen=100)  # ms desde que se lee un frame hasta que queda publicado
         self.lock = threading.Lock()
         self.is_running = True
-        self._last_error_log = 0.0
-        self._failing_since = None  # Inicio de una racha de fallos al procesar frames
-        self._processing_failed = False  # La racha dura más de PROCESSING_ERROR_AFTER: se muestra en el panel
+        self._errors = FailureStreak()
         self._prev_time: Optional[float] = None  # Hora del frame anterior (None: el primero de esta cámara)
 
         self.evidence = evidence.EvidenceRecorder()
@@ -159,9 +194,14 @@ class VideoPipeline:
             self.thread.start()
 
     @property
+    def conf_threshold(self) -> float:
+        """El umbral que fijó el operador o, si no ha fijado ninguno, el recomendado del modo actual."""
+        return self.user_conf if self.user_conf is not None else self.detector.profile.threshold
+
+    @property
     def camera_error(self) -> Optional[str]:
         """El error de la cámara o, si la cámara va bien pero el procesamiento lleva un rato fallando, ese."""
-        return self.camera.error or (PROCESSING_ERROR if self._processing_failed else None)
+        return self.camera.error or (PROCESSING_ERROR if self._errors.failing else None)
 
     def stop(self):
         """Termina el hilo de vídeo y libera la cámara (al cerrar el servidor)."""
@@ -172,13 +212,10 @@ class VideoPipeline:
     def _clear_detections(self):
         """Borra lo detectado. Sin frames, o con otra cámara u otro modo, una infracción vista antes dejaría la
         alarma sonando y el borde rojo, o confirmaría una infracción que ya no está."""
-        self.items = counting.empty_items(self.detector.profile)
-        self.neutral = 0
-        self.violations = 0
-        self.safety_score = 100
-        self.violation_confirmed = False
-        self._recent_violations.clear()
-        self.evidence.reset_episode()
+        with self._profile_lock:
+            self.detected = Detected.nothing(self.detector.profile)
+            self._recent_violations.clear()
+            self.evidence.reset_episode()
         self.fps = 0.0
 
     def _on_camera_switch(self):
@@ -216,9 +253,8 @@ class VideoPipeline:
                 self.profile_error = f"No se pudo cargar el modo {profile_id}: {e}"
                 self.profile_loading = None
             return
-        old, self.detector = self.detector, new
-        if new.profile.conf is not None and not self.conf_set_by_user:
-            self.conf_threshold = new.profile.conf  # Umbral recomendado para este modelo
+        with self._profile_lock:  # Desde aquí, un frame del modo anterior ya no publica lo que contó
+            old, self.detector = self.detector, new
         self._clear_detections()
         logger.info("Modo de detección cambiado: %s -> %s", old.profile.name, new.profile.name)
         with self._profile_lock:
@@ -245,12 +281,12 @@ class VideoPipeline:
         self._draw_boxes(frame, detector, coords, confs, names, counts.flags)
 
         # Si se cambió de modo durante este frame, sus contadores ya no corresponden al modo actual
-        if detector is self.detector:
-            self.items, self.neutral = counts.items, counts.neutral
-            self.violations, self.safety_score = counts.violations, counts.safety_score
-            self._recent_violations.append(counts.violations > 0)
-            self.violation_confirmed = sum(self._recent_violations) >= VIOLATION_MIN_FRAMES
-            self.evidence.update(frame, detector.profile, counts, self.violation_confirmed, current_time)
+        with self._profile_lock:
+            if detector is self.detector:
+                self._recent_violations.append(counts.violations > 0)
+                confirmed = sum(self._recent_violations) >= VIOLATION_MIN_FRAMES
+                self.detected = Detected(detector.profile, counts, confirmed)
+                self.evidence.update(frame, detector.profile, counts, confirmed, current_time)
 
         self._publish_frame(frame)
         self.latency_window.append((time.perf_counter() - frame_start) * 1000)
@@ -305,8 +341,7 @@ class VideoPipeline:
             # Media móvil: con 1 / Δt de un solo frame la cifra del panel saltaba de un valor a otro
             instant = 1.0 / time_diff
             self.fps = instant if self.fps == 0 else FPS_SMOOTHING * instant + (1 - FPS_SMOOTHING) * self.fps
-        self._failing_since = None  # El procesamiento funciona (o se ha recuperado)
-        self._processing_failed = False
+        self._errors.succeeded()
 
     def _on_processing_error(self, frame):
         """Tras un fallo al procesar un frame (CUDA, TensorRT, OpenCV...), el hilo sigue con el siguiente.
@@ -315,15 +350,8 @@ class VideoPipeline:
         infracción anterior mantendría la alarma), se sigue enviando el vídeo sin anotar y, si el fallo dura más
         de PROCESSING_ERROR_AFTER segundos, se muestra como error.
         """
-        now = time.time()
-        if now - self._last_error_log > 10:
-            logger.exception("Error al procesar un frame; se continúa con el siguiente")
-            self._last_error_log = now
+        self._errors.failed(time.time())
         self._clear_detections()
-        if self._failing_since is None:
-            self._failing_since = now
-        elif now - self._failing_since > PROCESSING_ERROR_AFTER:
-            self._processing_failed = True
         try:
             self._publish_frame(frame)
         except Exception:

@@ -140,15 +140,16 @@ class Counts(NamedTuple):
         total = ok + self.violations
         return int(ok / total * 100) if total > 0 else 100
 
-
-def empty_items(profile: Profile) -> Dict[str, Dict[str, int]]:
-    return {item: {"ok": 0, "missing": 0} for item in profile.items}
+    @classmethod
+    def empty(cls, profile: Profile) -> "Counts":
+        """Nada contado: cada elemento del perfil a cero."""
+        return cls({item: {"ok": 0, "missing": 0} for item in profile.items}, 0, 0.0, [])
 
 
 def count(profile: Profile, class_names: Sequence[str], confs: Sequence[float],
           boxes: Sequence[Box]) -> Counts:
     """Cuenta los elementos llevados y los que faltan, los recuadros neutrales y la confianza de la infracción."""
-    items = empty_items(profile)
+    items = Counts.empty(profile).items
     neutral = 0
     highest = 0.0
     flags = counted_flags(profile, class_names, boxes, confs)

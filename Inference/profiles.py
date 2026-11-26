@@ -56,6 +56,10 @@ class Profile(NamedTuple):
     def rule(self, class_name: str) -> ClassRule:
         return self.classes[class_name]
 
+    def summary(self) -> Dict[str, object]:
+        """Lo que el panel necesita del modo (en /api/profiles y /api/stats)."""
+        return {"id": self.id, "name": self.name, "items": self.items}
+
     @property
     def threshold(self) -> float:
         """Umbral con el que se usa el modo: el recomendado en profile.json o, si no hay, DEFAULT_CONF."""

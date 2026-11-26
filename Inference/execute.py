@@ -122,8 +122,7 @@ class ProfileSelect(BaseModel):
 @app.post("/api/settings")
 def update_settings(payload: SettingsUpdate):
     if profiles.CONF_MIN <= payload.conf <= profiles.CONF_MAX:
-        pipeline.conf_threshold = payload.conf
-        pipeline.conf_set_by_user = True
+        pipeline.user_conf = payload.conf  # Desde ahora, cambiar de modo ya no cambia el umbral
         return {"status": "success", "conf_threshold": pipeline.conf_threshold}
     raise HTTPException(status_code=400,
                         detail=f"El umbral debe estar entre {profiles.CONF_MIN:.2f} y {profiles.CONF_MAX:.2f}")
@@ -164,7 +163,7 @@ def get_profiles():
         except Exception as e:  # Un profile.json roto no debe ocultar los demás modos
             logger.warning("Perfil %s no válido: %s", profile_id, e)
             continue
-        available.append({"id": p.id, "name": p.name, "items": p.items})
+        available.append(p.summary())
     return {
         "profiles": available,
         "current": pipeline.detector.profile.id,
@@ -202,7 +201,8 @@ def get_infractions(request: Request):
 @app.get("/api/stats")
 def get_stats():
     camera_info = pipeline.camera.info(probe=False)
-    detector = pipeline.detector
+    detected = pipeline.detected  # Una sola lectura: los contadores y el modo son los del mismo frame
+    counts = detected.counts
     log = list(pipeline.evidence.log)
 
     # Latencia de procesamiento del servidor: lectura del frame -> frame anotado y codificado (últimos 100 frames)
@@ -215,15 +215,15 @@ def get_stats():
         "processing_p95_ms": processing_p95_ms,
         "fps": round(pipeline.fps, 1),
         "device": runtime.DEVICE.upper(),
-        "weights_format": detector.model.weights_format,
-        "profile": detector.summary(),
+        "weights_format": pipeline.detector.model.weights_format,
+        "profile": detected.profile.summary(),
         "profile_loading": pipeline.profile_loading,  # Id del modo que se está cargando, o None
         "profile_error": pipeline.profile_error,
-        "items": pipeline.items,
-        "neutral": pipeline.neutral,
-        "violations": pipeline.violations,
-        "violation_confirmed": pipeline.violation_confirmed,
-        "safety_score": pipeline.safety_score,
+        "items": counts.items,
+        "neutral": counts.neutral,
+        "violations": counts.violations,
+        "violation_confirmed": detected.violation_confirmed,
+        "safety_score": counts.safety_score,
         "conf_threshold": pipeline.conf_threshold,
         "infractions_total": len(log),
         "last_infraction_id": log[-1]["id"] if log else None,

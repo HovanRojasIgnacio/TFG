@@ -89,15 +89,15 @@ class PipelineTestCase(unittest.TestCase):
 class ViolationConfirmationTest(PipelineTestCase):
     def test_one_frame_is_counted_but_not_recorded(self):
         self.process(NO_HELMET)
-        self.assertEqual(self.pipeline.violations, 1)
-        self.assertFalse(self.pipeline.violation_confirmed)
+        self.assertEqual(self.pipeline.detected.counts.violations, 1)
+        self.assertFalse(self.pipeline.detected.violation_confirmed)
         self.assertEqual(self.snapshots(), [])
         self.assertEqual(len(self.pipeline.evidence.log), 0)
 
     def test_several_frames_confirm_and_record_once(self):
         for _ in range(video.VIOLATION_MIN_FRAMES + 2):
             self.process(NO_HELMET)
-        self.assertTrue(self.pipeline.violation_confirmed)
+        self.assertTrue(self.pipeline.detected.violation_confirmed)
         self.assertEqual(len(self.snapshots()), 1)  # Las siguientes esperan los 4 s entre capturas
         entry = self.pipeline.evidence.log[0]
         self.assertEqual(entry["details"], "Falta: casco ×1")
@@ -107,7 +107,7 @@ class ViolationConfirmationTest(PipelineTestCase):
     def test_a_missed_frame_does_not_cancel_the_violation(self):
         for detections in (NO_HELMET, NO_HELMET, HELMET, NO_HELMET, NO_HELMET, NO_HELMET):
             self.process(detections)
-        self.assertTrue(self.pipeline.violation_confirmed)
+        self.assertTrue(self.pipeline.detected.violation_confirmed)
 
     def test_a_violation_that_stays_is_recorded_once_a_minute(self):
         # Diez minutos con el mismo operario sin casco: una captura por minuto, no una cada 4 s (que llenaba
@@ -130,8 +130,8 @@ class ViolationConfirmationTest(PipelineTestCase):
             self.process(NO_HELMET)
         for _ in range(video.VIOLATION_WINDOW):
             self.process(HELMET)
-        self.assertFalse(self.pipeline.violation_confirmed)
-        self.assertEqual(self.pipeline.violations, 0)
+        self.assertFalse(self.pipeline.detected.violation_confirmed)
+        self.assertEqual(self.pipeline.detected.counts.violations, 0)
 
 
 class InfractionLogTest(PipelineTestCase):
@@ -288,7 +288,7 @@ class ApiTest(PipelineTestCase):
 
     def test_settings(self):
         self.assertEqual(self.client.post("/api/settings", json={"conf": 0.5}).json()["conf_threshold"], 0.5)
-        self.assertTrue(self.pipeline.conf_set_by_user)
+        self.assertEqual(self.pipeline.user_conf, 0.5)
         for conf in (0.05, 0.99):
             self.assertEqual(self.client.post("/api/settings", json={"conf": conf}).status_code, 400)
         self.assertEqual(self.client.post("/api/settings", json={"conf": "alto"}).status_code, 422)
@@ -330,17 +330,33 @@ class ProfileChangeTest(PipelineTestCase):
     def test_new_mode_replaces_the_detector_and_clears_the_counters(self):
         for _ in range(video.VIOLATION_MIN_FRAMES):
             self.process(NO_HELMET)
+        self.assertEqual(self.pipeline.conf_threshold, 0.35)  # El recomendado del modo casco y chaleco
         self.load("casco", self.casco_detector)
         self.assertEqual(self.pipeline.detector.profile.id, "casco")
-        self.assertEqual(self.pipeline.items, {"helmet": {"ok": 0, "missing": 0}})
-        self.assertEqual((self.pipeline.violations, self.pipeline.violation_confirmed), (0, False))
+        detected = self.pipeline.detected
+        self.assertEqual((detected.profile.id, detected.counts.items), ("casco", {"helmet": {"ok": 0, "missing": 0}}))
+        self.assertEqual((detected.counts.violations, detected.violation_confirmed), (0, False))
         self.assertIsNone(self.pipeline.profile_loading)
         self.assertEqual(self.pipeline.conf_threshold, 0.325)  # El recomendado del modo casco
 
     def test_the_operators_threshold_is_kept(self):
-        self.pipeline.conf_threshold, self.pipeline.conf_set_by_user = 0.6, True
+        self.pipeline.user_conf = 0.6
         self.load("casco", self.casco_detector)
         self.assertEqual(self.pipeline.conf_threshold, 0.6)
+
+    def test_a_frame_that_ends_after_the_switch_does_not_count(self):
+        # El frame empieza con el modo anterior y el cambio termina mientras el modelo lo analiza: lo que cuente
+        # ese frame es del modo anterior y no debe aparecer como lo detectado con el nuevo
+        predict = self.model.predict
+
+        def predict_and_switch(frame, **kwargs):
+            self.model.predict = predict
+            self.load("casco", self.casco_detector)
+            return predict(frame, **kwargs)
+        self.model.predict = predict_and_switch
+        self.process(NO_HELMET)
+        self.assertEqual(self.pipeline.detected, video.Detected.nothing(profiles.load("casco")))
+        self.assertEqual(len(self.pipeline._recent_violations), 0)
 
     def test_a_failed_load_keeps_the_current_mode(self):
         def broken(*_args, **_kwargs):
@@ -358,6 +374,26 @@ class ProfileChangeTest(PipelineTestCase):
         self.pipeline.profile_loading = "casco"
         with self.assertRaises(video.ProfileBusy):
             self.pipeline.select_profile("casco")
+
+
+class ProcessingErrorTest(PipelineTestCase):
+    def test_a_lasting_failure_is_shown_until_a_frame_works_again(self):
+        for _ in range(video.VIOLATION_MIN_FRAMES):
+            self.process(NO_HELMET)
+        clock = [self.now]
+        with mock.patch.object(FakeModel, "predict", side_effect=RuntimeError("CUDA")), \
+                mock.patch.object(video.time, "time", lambda: clock[0]), mock.patch.object(video.time, "sleep"), \
+                self.assertLogs("guardwatch", level="ERROR") as logs:
+            for _ in range(30):  # Tres segundos fallando, un frame cada 0,1 s
+                clock[0] += 0.1
+                self.pipeline._handle_frame(self.frame.copy(), self.pipeline.camera.source)
+                if clock[0] - self.now < video.PROCESSING_ERROR_AFTER:
+                    self.assertIsNone(self.pipeline.camera_error)  # Un fallo suelto no se muestra
+        self.assertEqual(self.pipeline.camera_error, video.PROCESSING_ERROR)
+        self.assertEqual(len(logs.records), 1)  # Un registro cada ERROR_LOG_INTERVAL, no uno por frame
+        self.assertFalse(self.pipeline.detected.violation_confirmed)  # La alarma no sigue sonando
+        self.pipeline._handle_frame(self.frame.copy(), self.pipeline.camera.source)
+        self.assertIsNone(self.pipeline.camera_error)
 
 
 class FakeCapture:
@@ -456,13 +492,13 @@ class CameraTest(PipelineTestCase):
         self.addCleanup(self.pipeline.stop)
         with self.assertLogs("guardwatch", level="WARNING"):
             for _ in range(300):  # Hasta 6 s: la primera cámara falla, el bucle la suelta y abre la segunda
-                if len(opened) >= 2 and self.pipeline.items["helmet"]["ok"] == 1:
+                if len(opened) >= 2 and self.pipeline.detected.counts.items["helmet"]["ok"] == 1:
                     break
                 video.time.sleep(0.02)
         self.assertGreaterEqual(len(opened), 2)
         self.assertTrue(caps[0].released)
         self.assertIsNone(self.pipeline.camera_error)
-        self.assertEqual(self.pipeline.items["helmet"]["ok"], 1)
+        self.assertEqual(self.pipeline.detected.counts.items["helmet"]["ok"], 1)
         self.pipeline.stop()
         self.assertTrue(caps[1].released)
 
@@ -517,7 +553,7 @@ class CameraTest(PipelineTestCase):
     def test_a_camera_change_clears_the_previous_cameras_violations(self):
         for _ in range(video.VIOLATION_MIN_FRAMES):
             self.process(NO_HELMET)
-        self.assertTrue(self.pipeline.violation_confirmed)
+        self.assertTrue(self.pipeline.detected.violation_confirmed)
         # Cambio de cámara con el bucle real: la ventana de infracciones de la anterior no debe sobrevivir
         # La cámara nueva da un solo fotograma tras la prueba de conexión (y luego falla durante
         # FRAME_FAIL_TIMEOUT), para que la ventana que se comprueba sea la del primer fotograma
@@ -527,11 +563,11 @@ class CameraTest(PipelineTestCase):
         self.pipeline.thread.start()
         self.addCleanup(self.pipeline.stop)
         for _ in range(150):  # Hasta 3 s a que el bucle procese un fotograma de la cámara nueva
-            if self.pipeline.items["helmet"]["ok"] == 1:
+            if self.pipeline.detected.counts.items["helmet"]["ok"] == 1:
                 break
             video.time.sleep(0.02)
-        self.assertEqual(self.pipeline.items["helmet"]["ok"], 1)
-        self.assertFalse(self.pipeline.violation_confirmed)
+        self.assertEqual(self.pipeline.detected.counts.items["helmet"]["ok"], 1)
+        self.assertFalse(self.pipeline.detected.violation_confirmed)
         self.assertEqual(sum(self.pipeline._recent_violations), 0)
 
     def test_the_panel_always_gets_a_camera_name(self):
