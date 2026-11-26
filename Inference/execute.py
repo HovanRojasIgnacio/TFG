@@ -10,8 +10,9 @@ import logging
 import socket
 import time
 from contextlib import asynccontextmanager
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -107,8 +108,31 @@ app.add_middleware(HostCheckMiddleware)
 app.mount("/static", StaticFiles(directory=evidence.STATIC_DIR, check_dir=False), name="static")
 
 
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_request, exc: RequestValidationError):
+    """Una petición no válida es un 400 con un solo mensaje, el que muestra el panel.
+
+    Los mensajes para el operador los escriben los modelos (los validadores de SettingsUpdate y de las cámaras de
+    cameras.py); un error de forma (falta un campo, un número que no lo es) lleva el de Pydantic tras el campo.
+    """
+    error = exc.errors()[0]
+    if error["type"] == "value_error":
+        message = str(error["ctx"]["error"])
+    else:
+        field = ".".join(str(part) for part in error["loc"] if part != "body")
+        message = f"{field}: {error['msg']}" if field else error["msg"]
+    return JSONResponse(status_code=400, content={"detail": message})
+
+
 class SettingsUpdate(BaseModel):
     conf: float
+
+    @field_validator("conf")
+    @classmethod
+    def _in_range(cls, conf: float) -> float:
+        if not profiles.CONF_MIN <= conf <= profiles.CONF_MAX:
+            raise ValueError(f"El umbral debe estar entre {profiles.CONF_MIN:.2f} y {profiles.CONF_MAX:.2f}")
+        return conf
 
 
 class ProfileSelect(BaseModel):
@@ -117,11 +141,8 @@ class ProfileSelect(BaseModel):
 
 @app.post("/api/settings")
 def update_settings(payload: SettingsUpdate):
-    if profiles.CONF_MIN <= payload.conf <= profiles.CONF_MAX:
-        pipeline.user_conf = payload.conf  # Desde ahora, cambiar de modo ya no cambia el umbral
-        return {"status": "success", "conf_threshold": pipeline.conf_threshold}
-    raise HTTPException(status_code=400,
-                        detail=f"El umbral debe estar entre {profiles.CONF_MIN:.2f} y {profiles.CONF_MAX:.2f}")
+    pipeline.user_conf = payload.conf  # Desde ahora, cambiar de modo ya no cambia el umbral
+    return {"status": "success", "conf_threshold": pipeline.conf_threshold}
 
 
 @app.get("/api/cameras")
@@ -132,20 +153,9 @@ def get_cameras(refresh: bool = False):
 
 @app.post("/api/cameras/select")
 def select_camera(payload: cameras.CameraSource):
-    """Cambia a otra fuente de cámara."""
-    if payload.type == "ip":
-        # Solo protocolos de red: evita que OpenCV abra rutas de archivo locales u otros esquemas
-        if not payload.url or not payload.url.strip().lower().startswith(cameras.ALLOWED_IP_SCHEMES):
-            raise HTTPException(status_code=400,
-                                detail="La URL de la cámara IP debe empezar por http://, https:// o rtsp://")
-    elif payload.type == "local":
-        if payload.index is None or payload.index < 0:
-            raise HTTPException(status_code=400, detail="Índice de cámara local no válido")
-    else:
-        raise HTTPException(status_code=400, detail="Tipo de cámara no válido (use 'local' o 'ip')")
-
+    """Cambia a otra fuente de cámara (el tipo, el índice y la URL ya los ha validado el modelo)."""
     if pipeline.camera.select(payload):
-        return {"status": "success", "camera": pipeline.camera.info(probe=False)["current"]}
+        return {"status": "success", "camera": pipeline.camera.source.summary()}
     raise HTTPException(status_code=400, detail="No se pudo conectar a la cámara seleccionada")
 
 

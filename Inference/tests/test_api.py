@@ -78,7 +78,7 @@ class PipelineTestCase(unittest.TestCase):
     def process(self, detections, seconds=0.1):
         self.model.detections = detections
         self.now += seconds
-        self.pipeline._process_frame(self.frame.copy(), self.pipeline.camera.source, self.now, 0.0)
+        self.pipeline._process_frame(self.frame.copy(), self.now, 0.0)
 
     def snapshots(self):
         return [f for f in os.listdir(self.tmp.name) if f.endswith(".jpg")]
@@ -288,14 +288,24 @@ class ApiTest(PipelineTestCase):
         self.assertEqual(self.pipeline.user_conf, 0.5)
         for conf in (0.05, 0.99):
             self.assertEqual(self.client.post("/api/settings", json={"conf": conf}).status_code, 400)
-        self.assertEqual(self.client.post("/api/settings", json={"conf": "alto"}).status_code, 422)
+        response = self.client.post("/api/settings", json={"conf": 0.05})
+        self.assertEqual(response.json()["detail"], "El umbral debe estar entre 0.10 y 0.95")
+        self.assertEqual(self.client.post("/api/settings", json={"conf": "alto"}).status_code, 400)
         self.assertEqual(self.pipeline.conf_threshold, 0.5)
 
     def test_invalid_cameras_are_refused_without_opening_anything(self):
         for body in ({"type": "ip", "url": "file:///C:/Windows/win.ini"}, {"type": "ip"}, {"type": "usb"},
                      {"type": "local"}, {"type": "local", "index": -1}):
             with self.subTest(body=body):
-                self.assertEqual(self.client.post("/api/cameras/select", json=body).status_code, 400)
+                response = self.client.post("/api/cameras/select", json=body)
+                self.assertEqual(response.status_code, 400)
+                self.assertIsInstance(response.json()["detail"], str)  # Un mensaje que el panel puede mostrar
+        messages = {"La URL de la cámara IP debe empezar por http://, https:// o rtsp://": {"type": "ip", "url": "C:/x"},
+                    "Índice de cámara local no válido": {"type": "local", "index": -1},
+                    "Tipo de cámara no válido (use 'local' o 'ip')": {"type": "usb"}}
+        for message, body in messages.items():
+            with self.subTest(body=body):
+                self.assertEqual(self.client.post("/api/cameras/select", json=body).json()["detail"], message)
 
     def test_profiles(self):
         data = self.client.get("/api/profiles").json()
@@ -383,13 +393,13 @@ class ProcessingErrorTest(PipelineTestCase):
                 self.assertLogs("guardwatch", level="ERROR") as logs:
             for _ in range(30):  # Tres segundos fallando, un frame cada 0,1 s
                 clock[0] += 0.1
-                self.pipeline._handle_frame(self.frame.copy(), self.pipeline.camera.source)
+                self.pipeline._handle_frame(self.frame.copy())
                 if clock[0] - self.now < video.PROCESSING_ERROR_AFTER:
                     self.assertIsNone(self.pipeline.camera_error)  # Un fallo suelto no se muestra
         self.assertEqual(self.pipeline.camera_error, video.PROCESSING_ERROR)
         self.assertEqual(len(logs.records), 1)  # Un registro cada ERROR_LOG_INTERVAL, no uno por frame
         self.assertFalse(self.pipeline.detected.violation_confirmed)  # La alarma no sigue sonando
-        self.pipeline._handle_frame(self.frame.copy(), self.pipeline.camera.source)
+        self.pipeline._handle_frame(self.frame.copy())
         self.assertIsNone(self.pipeline.camera_error)
 
 
@@ -413,17 +423,17 @@ class FakeCapture:
 
 
 class CameraTest(PipelineTestCase):
-    LOCAL_1 = dict(type="local", index=1, name="Otra")
+    LOCAL_1 = dict(index=1, name="Otra")
 
     def test_selecting_the_camera_in_use_connects_nothing(self):
         with mock.patch.object(cameras, "open_capture") as open_capture:
-            self.assertTrue(self.pipeline.camera.select(cameras.CameraSource(type="local", index=0, name="x")))
+            self.assertTrue(self.pipeline.camera.select(cameras.LocalCamera(index=0, name="x")))
         open_capture.assert_not_called()
 
     def test_a_working_camera_is_handed_to_the_video_loop_already_open(self):
         cap = FakeCapture()
         with mock.patch.object(cameras, "open_capture", return_value=cap):
-            self.assertTrue(self.pipeline.camera.select(cameras.CameraSource(**self.LOCAL_1)))
+            self.assertTrue(self.pipeline.camera.select(cameras.LocalCamera(**self.LOCAL_1)))
         self.assertEqual(self.pipeline.camera.source.index, 1)
         self.assertIs(self.pipeline.camera._handover[1], cap)
         self.assertFalse(cap.released)
@@ -431,7 +441,7 @@ class CameraTest(PipelineTestCase):
     def test_a_camera_without_frames_is_refused_and_released(self):
         for cap in (FakeCapture(frames=0), FakeCapture(opened=False)):
             with self.subTest(opened=cap.opened), mock.patch.object(cameras, "open_capture", return_value=cap):
-                self.assertFalse(self.pipeline.camera.select(cameras.CameraSource(**self.LOCAL_1)))
+                self.assertFalse(self.pipeline.camera.select(cameras.LocalCamera(**self.LOCAL_1)))
                 self.assertEqual(self.pipeline.camera.source.index, 0)  # Sigue la cámara anterior
                 self.assertTrue(cap.released)
 
@@ -444,7 +454,7 @@ class CameraTest(PipelineTestCase):
             release.wait(5)
             return cap
         with mock.patch.object(cameras, "open_capture", slow_open), self.assertLogs("guardwatch", level="WARNING"):
-            self.assertIsNone(cameras.connect_camera(cameras.CameraSource(**self.LOCAL_1), timeout=0.05))
+            self.assertIsNone(cameras.connect_camera(cameras.LocalCamera(**self.LOCAL_1), timeout=0.05))
         release.set()
         for _ in range(100):  # La prueba abandonada libera la cámara cuando por fin se abre
             if cap.released:
@@ -540,7 +550,7 @@ class CameraTest(PipelineTestCase):
             probe.assert_any_call(0)
             # La cámara abierta en el índice 3 aparece aunque falten las de los índices 1 y 2, y no se sondea
             probe.reset_mock()
-            self.pipeline.camera.source = cameras.CameraSource(type="local", index=3, name="Cuarta")
+            self.pipeline.camera.source = cameras.LocalCamera(index=3, name="Cuarta")
             self.pipeline.camera._cap = FakeCapture()
             listed = self.pipeline.camera.info(force_refresh=True)["available_local"]
             self.assertEqual([c["index"] for c in listed], [3])
@@ -554,7 +564,7 @@ class CameraTest(PipelineTestCase):
         # La cámara nueva da un solo fotograma tras la prueba de conexión (y luego falla durante
         # FRAME_FAIL_TIMEOUT), para que la ventana que se comprueba sea la del primer fotograma
         with mock.patch.object(cameras, "open_capture", return_value=FakeCapture(frames=2)):
-            self.assertTrue(self.pipeline.camera.select(cameras.CameraSource(**self.LOCAL_1)))
+            self.assertTrue(self.pipeline.camera.select(cameras.LocalCamera(**self.LOCAL_1)))
         self.model.detections = HELMET
         self.pipeline.thread.start()
         self.addCleanup(self.pipeline.stop)
@@ -568,9 +578,9 @@ class CameraTest(PipelineTestCase):
 
     def test_the_panel_always_gets_a_camera_name(self):
         # Una cámara IP elegida sin nombre se muestra por su dirección, sin credenciales
-        self.pipeline.camera.source = cameras.CameraSource(type="ip", url="http://admin:x@10.0.0.5:8080/video")
+        self.pipeline.camera.source = cameras.IpCamera(url="http://admin:x@10.0.0.5:8080/video")
         self.assertEqual(self.pipeline.camera.info(probe=False)["current"]["name"], "http://***@10.0.0.5:8080/video")
-        self.pipeline.camera.source = cameras.CameraSource(type="local", index=2)
+        self.pipeline.camera.source = cameras.LocalCamera(index=2)
         self.assertEqual(self.pipeline.camera.info(probe=False)["current"]["name"], "Cámara Local 2")
 
 

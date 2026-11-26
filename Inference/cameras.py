@@ -7,10 +7,10 @@ import logging
 import re
 import threading
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Annotated, Callable, ClassVar, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlsplit, urlunsplit
 import cv2
-from pydantic import BaseModel
+from pydantic import BaseModel, Discriminator, Tag, field_validator
 
 logger = logging.getLogger("guardwatch")
 
@@ -118,42 +118,110 @@ def detect_local_cameras(max_cameras: int = 5, skip_index: Optional[int] = None)
     return cameras
 
 
-class CameraSource(BaseModel):
-    type: str  # "local" o "ip"
-    index: Optional[int] = None
-    url: Optional[str] = None
+class LocalCamera(BaseModel):
+    """Una cámara conectada al equipo (integrada o USB), por su índice."""
+    type: Literal["local"] = "local"
+    index: int
     name: Optional[str] = None
+    mirror: ClassVar[bool] = True  # Se voltea horizontalmente: el operador que se mira se ve como en un espejo
+
+    @field_validator("index")
+    @classmethod
+    def _valid_index(cls, index: int) -> int:
+        if index < 0:
+            raise ValueError("Índice de cámara local no válido")
+        return index
+
+    @property
+    def label(self) -> str:
+        """Nombre para el panel, los mensajes y los registros."""
+        return self.name or local_name(self.index)
+
+    @property
+    def key(self) -> Tuple:
+        """Qué cámara es (el nombre no cuenta)."""
+        return self.type, self.index
+
+    @property
+    def fail_timeout(self) -> float:
+        """Segundos sin frames válidos tras los que se da por desconectada."""
+        return FRAME_FAIL_TIMEOUT
+
+    def summary(self) -> Dict:
+        return {"type": self.type, "index": self.index, "url": None, "name": self.label}
+
+    def open(self):
+        cap = cv2.VideoCapture(self.index, cv2.CAP_DSHOW)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        return cap
+
+    def reader(self, cap):
+        """Lo que lee el bucle de vídeo: la propia cámara."""
+        return cap
 
 
-def source_label(source: CameraSource) -> str:
-    """Nombre de la cámara para el panel, los mensajes y los registros (sin credenciales)."""
-    return source.name or mask_url(source.url) or local_name(source.index)
+class IpCamera(BaseModel):
+    """Una cámara de red (o un móvil con una aplicación de cámara IP), por su URL."""
+    type: Literal["ip"] = "ip"
+    url: str
+    name: Optional[str] = None
+    mirror: ClassVar[bool] = False
+
+    @field_validator("url")
+    @classmethod
+    def _network_url(cls, url: str) -> str:
+        # Solo protocolos de red: evita que OpenCV abra rutas de archivo locales u otros esquemas
+        url = url.strip()
+        if not url.lower().startswith(ALLOWED_IP_SCHEMES):
+            raise ValueError("La URL de la cámara IP debe empezar por http://, https:// o rtsp://")
+        return url
+
+    @property
+    def label(self) -> str:
+        """Nombre para el panel, los mensajes y los registros (sin credenciales)."""
+        return self.name or mask_url(self.url)
+
+    @property
+    def key(self) -> Tuple:
+        return self.type, self.url
+
+    @property
+    def fail_timeout(self) -> float:
+        return IP_FRAME_FAIL_TIMEOUT
+
+    def summary(self) -> Dict:
+        return {"type": self.type, "index": None, "url": mask_url(self.url), "name": self.label}
+
+    def open(self):
+        """Con FFmpeg y tiempos máximos explícitos: sin ellos, una URL que no responde bloquea unos 30 s en
+        FFmpeg y después OpenCV prueba otros backends (hasta ~2 min)."""
+        return cv2.VideoCapture(self.url, cv2.CAP_FFMPEG, [
+            cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, IP_OPEN_TIMEOUT_MS,
+            cv2.CAP_PROP_READ_TIMEOUT_MSEC, IP_READ_TIMEOUT_MS,
+        ])
+
+    def reader(self, cap):
+        """Lo que lee el bucle de vídeo: siempre el último frame (véase LatestFrameReader)."""
+        return LatestFrameReader(cap)
 
 
-def same_source(a: Optional[CameraSource], b: Optional[CameraSource]) -> bool:
-    """True si las dos fuentes son la misma cámara (el nombre no cuenta)."""
-    return a is not None and b is not None and (a.type, a.index, a.url) == (b.type, b.index, b.url)
+def _camera_type(value) -> Optional[str]:
+    """El tipo de una cámara, venga como JSON de la API o ya construida."""
+    return value.get("type") if isinstance(value, dict) else getattr(value, "type", None)
+
+
+# Una cámara de cualquiera de los dos tipos; es el cuerpo de POST /api/cameras/select
+CameraSource = Annotated[
+    Union[Annotated[LocalCamera, Tag("local")], Annotated[IpCamera, Tag("ip")]],
+    Discriminator(_camera_type, custom_error_type="camera_type",
+                  custom_error_message="Tipo de cámara no válido (use 'local' o 'ip')")]
 
 
 def open_capture(source: CameraSource):
-    """Abre la cámara indicada. Devuelve el VideoCapture (abierto o no) o None si falla.
-
-    Las cámaras IP se abren con FFmpeg y tiempos máximos explícitos: sin ellos, una URL que no
-    responde bloquea unos 30 s en FFmpeg y después OpenCV prueba otros backends (hasta ~2 min).
-    """
+    """Abre la cámara indicada. Devuelve el VideoCapture (abierto o no) o None si falla."""
     try:
-        if source.type == "local":
-            cap = cv2.VideoCapture(source.index, cv2.CAP_DSHOW)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        elif source.type == "ip":
-            cap = cv2.VideoCapture(source.url, cv2.CAP_FFMPEG, [
-                cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, IP_OPEN_TIMEOUT_MS,
-                cv2.CAP_PROP_READ_TIMEOUT_MSEC, IP_READ_TIMEOUT_MS,
-            ])
-        else:
-            return None
-        return cap
+        return source.open()
     except Exception as e:
         logger.error("No se pudo abrir la cámara: %s", e)
         return None
@@ -309,7 +377,7 @@ class CameraManager:
 
     def select(self, source: CameraSource) -> bool:
         """Cambia de cámara. Devuelve True si la nueva funciona (se prueba antes de cambiar)."""
-        if same_source(source, self.source):
+        if source.key == self.source.key:
             if self.error:
                 # La cámara actual está fallando: elegirla de nuevo pide reconectar ya, sin esperar al
                 # siguiente reintento (que puede tardar hasta RECONNECT_MAX_DELAY)
@@ -343,7 +411,7 @@ class CameraManager:
                 # La cámara local que el bucle tiene abierta no se vuelve a abrir (se interrumpiría). Si no está
                 # abierta (aún no conectó o falló) se sondea como las demás: darla por buena mostraba en la
                 # lista una cámara que no existe
-                in_use = source.type == "local" and self._cap is not None and self.error is None
+                in_use = isinstance(source, LocalCamera) and self._cap is not None and self.error is None
                 available = self._list_local(force_refresh, source.index if in_use else None)
             else:
                 available = self._local_cameras
@@ -351,8 +419,7 @@ class CameraManager:
             logger.error("Falló la detección de cámaras: %s", e)
             available = []
         return {
-            "current": {"type": source.type, "index": source.index, "url": mask_url(source.url),
-                        "name": source_label(source)},
+            "current": source.summary(),
             "available_local": available,
             "error": self.error,
         }
@@ -367,12 +434,14 @@ class CameraManager:
             return self._local_cameras
 
     def read(self):
-        """El siguiente frame, o None si no lo hay (sin cámara, reconectando o un fallo de lectura)."""
+        """El siguiente frame, ya volteado si la cámara es un espejo, o None si no lo hay (sin cámara,
+        reconectando o un fallo de lectura)."""
         self._take_request()
         if not self.connected:
             self._reconnect()
             return None
-        return self._read_frame()
+        frame = self._read_frame()
+        return cv2.flip(frame, 1) if frame is not None and self._current.mirror else frame
 
     def close(self):
         self._release()
@@ -405,10 +474,10 @@ class CameraManager:
 
     def _use(self, source: CameraSource, cap):
         """Empieza a leer de la cámara ya abierta (la única entrada a una cámara nueva o reconectada)."""
-        self._cap = LatestFrameReader(cap) if source.type == "ip" else cap
+        self._cap = source.reader(cap)
         self.error = None
         self._backoff.restart()
-        logger.info("Cámara conectada: %s", source_label(source))
+        logger.info("Cámara conectada: %s", source.label)
         self._last_frame_time = time.time()
         self._on_switch()  # Nada de la cámara anterior debe confirmar una infracción de esta
 
@@ -426,7 +495,7 @@ class CameraManager:
             self._use(source, cap)
             return
         release(cap)
-        self.error = f"No se pudo conectar a la cámara: {source_label(source)}"
+        self.error = f"No se pudo conectar a la cámara: {source.label}"
         logger.warning("Cámara no disponible, se reintenta en %.0fs", self._backoff.failed())
         time.sleep(0.5)
 
@@ -442,7 +511,7 @@ class CameraManager:
             return frame
         # Por tiempo y no por número de fallos: en una cámara IP cada lectura fallida puede tardar hasta
         # IP_READ_TIMEOUT_MS
-        fail_timeout = IP_FRAME_FAIL_TIMEOUT if self._current.type == "ip" else FRAME_FAIL_TIMEOUT
+        fail_timeout = self._current.fail_timeout
         if time.time() - self._last_frame_time > fail_timeout:
             logger.warning("Sin frames durante %.0fs, se libera la cámara", fail_timeout)
             self._release()

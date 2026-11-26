@@ -187,7 +187,7 @@ class VideoPipeline:
 
         self.evidence = recorder
         self.camera = cameras.CameraManager(
-            cameras.CameraSource(type="local", index=0, name=cameras.local_name(0)), on_switch=self._on_camera_switch)
+            cameras.LocalCamera(index=0), on_switch=self._on_camera_switch)
 
         self.thread = threading.Thread(target=self._process_stream, daemon=True)
         if start:
@@ -264,12 +264,8 @@ class VideoPipeline:
         time.sleep(1.0)
         free_gpu_memory()
 
-    def _process_frame(self, frame, source: cameras.CameraSource, current_time: float, frame_start: float):
+    def _process_frame(self, frame, current_time: float, frame_start: float):
         """Detección, dibujo, registro de infracciones y codificación de un frame."""
-        # En las cámaras locales se voltea horizontalmente (efecto espejo)
-        if source.type == "local":
-            frame = cv2.flip(frame, 1)
-
         # Una sola lectura por frame: si se cambia de modo a mitad, este frame termina con el detector anterior
         detector = self.detector
         names, confs, coords = detector.model.detect(frame, self.conf_threshold)
@@ -325,7 +321,7 @@ class VideoPipeline:
                 self.latest_encoded_frame = NO_SIGNAL_JPEG
                 self.frame_id += 1
 
-    def _handle_frame(self, frame, source: cameras.CameraSource):
+    def _handle_frame(self, frame):
         """Procesa un frame leído: lo analiza, actualiza los FPS y, si falla, deja el error para el panel."""
         frame_start = time.perf_counter()
         current_time = time.time()
@@ -333,9 +329,9 @@ class VideoPipeline:
         self._prev_time = current_time
 
         try:
-            self._process_frame(frame, source, current_time, frame_start)
+            self._process_frame(frame, current_time, frame_start)
         except Exception:
-            self._on_processing_error(cv2.flip(frame, 1) if source.type == "local" else frame)
+            self._on_processing_error(frame)
             return
         if time_diff > 0:
             # Media móvil: con 1 / Δt de un solo frame la cifra del panel saltaba de un valor a otro
@@ -364,7 +360,7 @@ class VideoPipeline:
             self.evidence.purge_if_due()
             frame = self.camera.read()
             if frame is not None:
-                self._handle_frame(frame, self.camera.current)
+                self._handle_frame(frame)
             elif not self.camera.connected:
                 self._clear_detections()
                 self._publish_no_signal()
