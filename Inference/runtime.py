@@ -62,6 +62,12 @@ class Model(NamedTuple):
     weights_path: str
     half: bool           # FP16 (best.pt en el servidor). Con False, FP32; un motor TensorRT lleva su precisión dentro
 
+    @classmethod
+    def open(cls, path: str, half: bool) -> "Model":
+        """Los pesos de path (best.pt o best.engine), sin inferencia de prueba."""
+        from ultralytics import YOLO
+        return cls(YOLO(path, task="detect"), path, half)
+
     @property
     def names(self):
         return self.yolo.names
@@ -145,14 +151,9 @@ def _engine_signature(weights: str) -> dict:
     return {"weights_sha256": _weights_digest(weights), **_build_environment()}
 
 
-def build_engine(base_dir: str) -> bool:
-    """Genera best.engine (TensorRT, FP16, formas dinámicas) a partir de best.pt. Devuelve True si lo logra.
-
-    Se exporta en una carpeta temporal para no pisar el best.onnx que pueda haber junto a los pesos.
-    Las formas dinámicas son necesarias: un motor estático 640x640 cambia el relleno de la imagen y
-    pierde detecciones respecto a best.pt.
-    """
-    pt, engine = pt_path(base_dir), engine_path(base_dir)
+def can_build_engine(base_dir: str) -> bool:
+    """True si hay best.pt y TensorRT; si no, registra por qué no se puede generar el motor."""
+    pt = pt_path(base_dir)
     if not os.path.exists(pt):
         logger.warning("No se puede generar el motor TensorRT: falta %s", pt)
         return False
@@ -160,6 +161,19 @@ def build_engine(base_dir: str) -> bool:
         logger.warning("No se puede generar el motor TensorRT: TensorRT no está instalado "
                        "(pip install -r requirements-tensorrt.txt)")
         return False
+    return True
+
+
+def build_engine(base_dir: str) -> bool:
+    """Genera best.engine (TensorRT, FP16, formas dinámicas) a partir de best.pt. Devuelve True si lo logra.
+
+    Se exporta en una carpeta temporal para no pisar el best.onnx que pueda haber junto a los pesos.
+    Las formas dinámicas son necesarias: un motor estático 640x640 cambia el relleno de la imagen y
+    pierde detecciones respecto a best.pt.
+    """
+    if not can_build_engine(base_dir):
+        return False
+    pt, engine = pt_path(base_dir), engine_path(base_dir)
 
     from ultralytics import YOLO
     logger.info("Generando el motor TensorRT para esta GPU (tarda aproximadamente un minuto)...")
@@ -222,8 +236,7 @@ def ensure_engine(base_dir: str, build: Builder) -> bool:
 def _load(path: str) -> Model:
     """Carga los pesos (best.pt en FP16) y hace una inferencia de prueba, que detecta motores incompatibles y
     sirve de warm-up."""
-    from ultralytics import YOLO
-    model = Model(YOLO(path, task="detect"), path, half=path.endswith(".pt"))
+    model = Model.open(path, half=path.endswith(".pt"))
     model.predict(np.zeros((480, 640, 3), dtype=np.uint8), conf=0.325)
     return model
 

@@ -24,9 +24,12 @@ mismo operario en varios niveles, para contarlo una sola vez (véase counting.py
 de confianza recomendado para el modelo.
 """
 import json
+import logging
 import os
 import re
 from typing import Dict, Mapping, NamedTuple, Optional
+
+logger = logging.getLogger("guardwatch")
 
 PROFILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles")
 STATES = ("ok", "missing", "neutral", "ignore")
@@ -114,7 +117,21 @@ def load(profile_id: str, profiles_dir: str = PROFILES_DIR) -> Profile:
     found = discover(profiles_dir)
     if profile_id not in found:
         raise KeyError(f"Perfil desconocido: {profile_id!r}. Disponibles: {', '.join(found) or 'ninguno'}")
-    base_dir = found[profile_id]
+    return _read(profile_id, found[profile_id])
+
+
+def load_all(profiles_dir: str = PROFILES_DIR) -> Dict[str, Profile]:
+    """Los perfiles instalados que se pueden leer, por id. Uno roto se registra y se omite: no oculta los demás."""
+    loaded = {}
+    for profile_id, base_dir in discover(profiles_dir).items():
+        try:
+            loaded[profile_id] = _read(profile_id, base_dir)
+        except Exception as e:
+            logger.warning("Perfil %s no válido: %s", profile_id, e)
+    return loaded
+
+
+def _read(profile_id: str, base_dir: str) -> Profile:
     with open(os.path.join(base_dir, "profile.json"), encoding="utf-8") as f:
         return parse(profile_id, json.load(f), base_dir)
 

@@ -15,18 +15,14 @@ Hay que ejecutarlo con tu conjunto de validación real antes de citar cifras de 
           detecciones coincidentes, perdidas, añadidas y cambios en la decisión "hay infracción".
 """
 import argparse
-import glob
 import os
 import venv_bootstrap
 venv_bootstrap.setup(__name__ == "__main__")
 
-from ultralytics import YOLO
-
 import counting
 import profiles
 from runtime import Model, build_engine, engine_path, ensure_engine, pt_path, require_cuda
-
-IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+from split_dataset import images_in
 
 
 def load_models(base_dir):
@@ -37,7 +33,7 @@ def load_models(base_dir):
         raise SystemExit(f"Falta {pt}: es la referencia de la comparación.")
     if not ensure_engine(base_dir, build_engine):
         raise SystemExit("No hay un best.engine actual y no se pudo generar (¿falta requirements-tensorrt.txt?).")
-    return Model(YOLO(pt, task="detect"), pt, half=False), Model(YOLO(engine, task="detect"), engine, half=False)
+    return Model.open(pt, half=False), Model.open(engine, half=False)
 
 
 def validate(model, data, split):
@@ -69,8 +65,7 @@ def _has_violation(profile, detections):
 
 
 def report_agreement(profile, pt_model, engine_model, folder):
-    images = sorted(p for p in glob.glob(os.path.join(folder, "**", "*"), recursive=True)
-                    if p.lower().endswith(IMAGE_EXTENSIONS))
+    images = images_in(folder, recursive=True)
     if not images:
         raise SystemExit(f"No hay imágenes en {folder}")
     threshold = profile.threshold  # El mismo umbral con el que arranca el servidor en este modo

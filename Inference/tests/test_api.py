@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -338,8 +339,7 @@ class ProfileChangeTest(PipelineTestCase):
         return video.Detector(profiles.load("casco"), Model(model, "best.pt", False))
 
     def load(self, profile_id, loader):
-        with mock.patch.object(video, "load_detector", loader), mock.patch.object(video.time, "sleep"), \
-                mock.patch.object(video, "free_gpu_memory"):
+        with mock.patch.object(video, "load_detector", loader):
             self.pipeline.profile_loading = profile_id  # Lo que deja select_profile antes de lanzar el hilo
             self.pipeline._load_profile(profile_id)
 
@@ -354,6 +354,16 @@ class ProfileChangeTest(PipelineTestCase):
         self.assertEqual((detected.counts.violations, detected.violation_confirmed), (0, False))
         self.assertIsNone(self.pipeline.profile_loading)
         self.assertEqual(self.pipeline.conf_threshold, 0.325)  # El recomendado del modo casco
+
+    def test_the_video_loop_frees_the_old_model_between_frames(self):
+        self.load("casco", self.casco_detector)
+        freed = threading.Event()
+        with mock.patch.object(video, "free_gpu_memory", freed.set), \
+                mock.patch.object(cameras, "open_capture", return_value=FakeCapture(frames=10_000)):
+            self.pipeline.thread.start()
+            self.assertTrue(freed.wait(timeout=3))
+            self.pipeline.stop()
+        self.assertFalse(self.pipeline._free_old_model)
 
     def test_the_operators_threshold_is_kept(self):
         self.pipeline.user_conf = 0.6

@@ -147,6 +147,11 @@ class Counts(NamedTuple):
         total = ok + self.violations
         return int(ok / total * 100) if total > 0 else 100
 
+    def missing_text(self, profile: Profile) -> str:
+        """Texto de una infracción con los elementos que faltan, p. ej. "Falta: casco ×1, chaleco ×2"."""
+        parts = [f"{profile.items[item].lower()} ×{c['missing']}" for item, c in self.items.items() if c["missing"]]
+        return "Falta: " + ", ".join(parts)
+
     @classmethod
     def empty(cls, profile: Profile) -> "Counts":
         """Nada contado: cada elemento del perfil a cero."""

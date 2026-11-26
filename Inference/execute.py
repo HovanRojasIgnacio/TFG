@@ -164,16 +164,8 @@ def select_camera(payload: cameras.CameraSource):
 @app.get("/api/profiles")
 def get_profiles():
     """Modos de detección instalados, el actual y el estado de la carga en curso."""
-    available = []
-    for profile_id in profiles.discover():
-        try:
-            p = profiles.load(profile_id)
-        except Exception as e:  # Un profile.json roto no debe ocultar los demás modos
-            logger.warning("Perfil %s no válido: %s", profile_id, e)
-            continue
-        available.append(p.summary())
     return {
-        "profiles": available,
+        "profiles": [p.summary() for p in profiles.load_all().values()],
         "current": pipeline.detector.profile.id,
         "loading": pipeline.profile_loading,
         "error": pipeline.profile_error,

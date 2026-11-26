@@ -16,8 +16,8 @@ import cameras
 import counting
 import evidence
 import profiles
-from runtime import (DEVICE, Builder, Model, build_engine, ensure_weights, free_gpu_memory, load_model, pt_path,
-                     tensorrt_available)
+from runtime import (DEVICE, Builder, Model, build_engine, can_build_engine, ensure_weights, free_gpu_memory,
+                     load_model, pt_path)
 
 logger = logging.getLogger("guardwatch")
 
@@ -78,8 +78,7 @@ def _check_weights(profile: profiles.Profile) -> None:
     ensure_weights(profile.base_dir, profile.weights_url, profile.weights_sha256)
     pt = pt_path(profile.base_dir)
     if os.path.exists(pt):
-        from ultralytics import YOLO
-        profiles.check_model(profile, YOLO(pt, task="detect").names)  # Solo lee los pesos en la CPU
+        profiles.check_model(profile, Model.open(pt, half=False).names)  # Solo lee los pesos en la CPU
 
 
 def _build_engine_apart(base_dir: str) -> bool:
@@ -88,7 +87,7 @@ def _build_engine_apart(base_dir: str) -> bool:
     Con el servidor en marcha, la exportación (ONNX, ModelOpt) dentro de este proceso compite por el GIL con el
     hilo de vídeo y lo congela varios segundos. Si falla, load_model usa best.pt.
     """
-    if not (os.path.exists(pt_path(base_dir)) and tensorrt_available()):
+    if not can_build_engine(base_dir):
         return False  # Fallaría enseguida: no merece la pena arrancar otro proceso con PyTorch y Ultralytics
     logger.info("Generando el motor TensorRT de %s en otro proceso (tarda aproximadamente un minuto)...",
                 os.path.basename(base_dir))
@@ -183,6 +182,7 @@ class VideoPipeline:
         self.lock = threading.Lock()
         self.is_running = True
         self._errors = FailureStreak()
+        self._free_old_model = False  # Se cambió de modo: el bucle libera la memoria del anterior entre dos frames
         self._prev_time: Optional[float] = None  # Hora del frame anterior (None: el primero de esta cámara)
 
         self.evidence = recorder
@@ -259,10 +259,10 @@ class VideoPipeline:
         logger.info("Modo de detección cambiado: %s -> %s", old.profile.name, new.profile.name)
         with self._profile_lock:
             self.profile_loading = None
-        # Se libera el modelo anterior cuando termina el frame que aún pudiera estar usándolo
+        # El frame que aún pudiera estar usando el modelo anterior lo retiene hasta que termina: la memoria la
+        # libera el bucle de vídeo antes del frame siguiente
         del old
-        time.sleep(1.0)
-        free_gpu_memory()
+        self._free_old_model = True
 
     def _process_frame(self, frame, current_time: float, frame_start: float):
         """Detección, dibujo, registro de infracciones y codificación de un frame."""
@@ -357,6 +357,9 @@ class VideoPipeline:
     def _process_stream(self):
         """Bucle del hilo de vídeo: limpieza periódica de evidencias, lectura de la cámara y proceso del frame."""
         while self.is_running:
+            if self._free_old_model:
+                self._free_old_model = False
+                free_gpu_memory()
             self.evidence.purge_if_due()
             frame = self.camera.read()
             if frame is not None:

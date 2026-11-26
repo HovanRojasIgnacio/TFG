@@ -9,7 +9,7 @@ import os
 import secrets
 import time
 from collections import deque
-from typing import Dict, List, Mapping, NamedTuple, Optional
+from typing import List, Mapping, NamedTuple, Optional
 import cv2
 import profiles
 
@@ -47,12 +47,6 @@ class Infraction(NamedTuple):
             return cls(**{field: entry[field] for field in cls._fields})
         except (TypeError, ValueError, KeyError):
             return None
-
-
-def missing_details(profile: profiles.Profile, items: Dict[str, Dict[str, int]]) -> str:
-    """Texto de una infracción con los elementos que faltan, p. ej. "Falta: casco ×1, chaleco ×2"."""
-    parts = [f"{profile.items[item].lower()} ×{c['missing']}" for item, c in items.items() if c["missing"]]
-    return "Falta: " + ", ".join(parts)
 
 
 class EvidenceRecorder:
@@ -194,6 +188,6 @@ class EvidenceRecorder:
             confidence=round(counts.highest_violation, 2),
             image=filename,
             profile=profile.name,
-            details=missing_details(profile, counts.items),
+            details=counts.missing_text(profile),
         ))
         self._save_log()

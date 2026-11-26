@@ -14,8 +14,10 @@ import random
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
 
-def images_in(folder):
-    return sorted(p for p in glob.glob(os.path.join(folder, "*")) if p.lower().endswith(IMAGE_EXTENSIONS))
+def images_in(folder, recursive=False):
+    """Las imágenes de una carpeta (y de sus subcarpetas, con recursive=True), en orden."""
+    pattern = os.path.join(folder, "**", "*") if recursive else os.path.join(folder, "*")
+    return sorted(p for p in glob.glob(pattern, recursive=recursive) if p.lower().endswith(IMAGE_EXTENSIONS))
 
 
 def main():

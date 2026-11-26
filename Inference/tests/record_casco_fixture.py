@@ -11,7 +11,6 @@ El fixture de casco_detections.json se grabó en el commit 819ff23, con el count
 sirve para ampliar el fixture, no como referencia independiente.
 """
 import argparse
-import glob
 import json
 import os
 import random
@@ -22,13 +21,10 @@ sys.path.insert(0, INFERENCE_DIR)
 import venv_bootstrap
 venv_bootstrap.setup(__name__ == "__main__")
 
-from ultralytics import YOLO
-
 import counting
 import profiles
 from runtime import Model
-
-IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+from split_dataset import images_in
 
 
 def _legacy(result):
@@ -47,10 +43,9 @@ def main():
                                                       "fixtures", "casco_detections.json"))
     args = parser.parse_args()
 
-    images = sorted(p for p in glob.glob(os.path.join(args.images, "**", "*"), recursive=True)
-                    if p.lower().endswith(IMAGE_EXTENSIONS))
+    images = images_in(args.images, recursive=True)
     random.Random(0).shuffle(images)
-    model = Model(YOLO(args.weights, task="detect"), args.weights, half=False)  # FP32
+    model = Model.open(args.weights, half=False)  # FP32
     profile = profiles.load("casco")
     frames = []
     for path in images[:args.count]:
