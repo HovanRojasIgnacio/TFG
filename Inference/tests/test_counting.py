@@ -212,6 +212,17 @@ class ProfileValidationTest(unittest.TestCase):
             with self.subTest(weights=bad), self.assertRaises(ValueError):
                 profiles.parse("x", {**VEST_PROFILE, "weights": bad})
 
+    def test_box_labels(self):
+        casco = profiles.load("casco")
+        self.assertEqual(casco.box_label("head_with_helmet"), "OK: Casco")
+        self.assertEqual(casco.box_label("head"), "PELIGRO: Sin Casco")
+        self.assertEqual(casco.box_label("face"), "Rostro")  # La etiqueta de profile.json
+        self.assertIsNone(casco.box_label("person"))  # ignore: no se dibuja
+        vest = profiles.parse("x", {**VEST_PROFILE, "classes": {**VEST_PROFILE["classes"],
+                                                                "cara": {"state": "neutral"}}})
+        self.assertEqual(vest.box_label("NoVest"), "PELIGRO: Sin Chaleco")
+        self.assertEqual(vest.box_label("cara"), "cara")  # Sin etiqueta, el nombre de la clase
+
     def test_installed_profiles_are_valid(self):
         for profile_id in profiles.discover():
             with self.subTest(profile=profile_id):

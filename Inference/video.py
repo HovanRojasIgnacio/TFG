@@ -61,16 +61,9 @@ class Detector:
     def __init__(self, profile: profiles.Profile, model: Model):
         profiles.check_model(profile, model.names)
         self.profile, self.model = profile, model
-        self.styles = {}  # Color BGR y texto de la etiqueta de cada clase que se dibuja
-        for name, rule in profile.classes.items():
-            if rule.state == "ignore":
-                continue
-            if rule.state == "neutral":
-                text = rule.label or name
-            else:
-                label = rule.label or profile.items[rule.item]
-                text = f"OK: {label}" if rule.state == "ok" else f"PELIGRO: Sin {label}"
-            self.styles[name] = (STATE_COLORS[rule.state], text)
+        # Color BGR y texto de la etiqueta de cada clase que se dibuja
+        self.styles = {name: (STATE_COLORS[rule.state], profile.box_label(name))
+                       for name, rule in profile.classes.items() if rule.state != "ignore"}
 
 
 def _check_weights(profile: profiles.Profile) -> None:

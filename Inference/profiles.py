@@ -59,6 +59,16 @@ class Profile(NamedTuple):
     def rule(self, class_name: str) -> ClassRule:
         return self.classes[class_name]
 
+    def box_label(self, class_name: str) -> Optional[str]:
+        """Texto del recuadro de una clase ("OK: Casco", "PELIGRO: Sin Casco", "Rostro"); None si no se dibuja."""
+        rule = self.classes[class_name]
+        if rule.state == "ignore":
+            return None
+        if rule.state == "neutral":
+            return rule.label or class_name
+        label = rule.label or self.items[rule.item]
+        return f"OK: {label}" if rule.state == "ok" else f"PELIGRO: Sin {label}"
+
     def summary(self) -> Dict[str, object]:
         """Lo que el panel necesita del modo (en /api/profiles y /api/stats)."""
         return {"id": self.id, "name": self.name, "items": self.items}

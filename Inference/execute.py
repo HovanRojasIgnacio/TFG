@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 import cameras
 import config
 import evidence
+import mjpeg
 import profiles
 import runtime
 import video
@@ -233,24 +234,15 @@ def get_stats():
     }
 
 
-# Separador y cabeceras de una parte del MJPEG; cada frame se envía seguido de los de la parte siguiente
-BOUNDARY = "frame"
-PART_HEADER = f"--{BOUNDARY}\r\nContent-Type: image/jpeg\r\n\r\n".encode()
-
-
 async def stream_generator():
     """Generador asíncrono: no ocupa hilos del servidor mientras espera frames.
 
     Con un generador síncrono, Starlette ejecuta cada paso en su grupo de 40 hilos, que comparte con todos
     los endpoints; sin frames (cámara caída) cada espectador que se iba dejaba un hilo ocupado y, al
     acumularse, la API entera dejaba de responder. Al desconectarse el cliente, Starlette cancela el
-    asyncio.sleep y el generador termina.
-
-    Cada frame va seguido del separador y las cabeceras de la parte siguiente: Chromium solo muestra una parte
-    cuando los recibe, así que con ellos delante cada frame se veía con un frame de retraso y el último antes de
-    una pausa (por ejemplo, «SIN IMAGEN» al perder la cámara) no se veía nunca.
+    asyncio.sleep y el generador termina. El formato de cada parte está en mjpeg.py.
     """
-    yield PART_HEADER
+    yield mjpeg.PART_HEADER
     last_id = -1
     while True:
         pipeline.last_viewer_time = time.time()
@@ -261,13 +253,13 @@ async def stream_generator():
         # Solo se envía si hay un frame nuevo (evita reenviar el mismo frame)
         if frame_bytes is not None and frame_id != last_id:
             last_id = frame_id
-            yield frame_bytes + b'\r\n' + PART_HEADER
+            yield mjpeg.part(frame_bytes)
         await asyncio.sleep(0.03)  # Limita el envío a ~30 FPS para no saturar el canal HTTP
 
 
 @app.get("/api/stream")
 async def video_feed():
-    return StreamingResponse(stream_generator(), media_type=f"multipart/x-mixed-replace; boundary={BOUNDARY}")
+    return StreamingResponse(stream_generator(), media_type=mjpeg.MEDIA_TYPE)
 
 
 if __name__ == "__main__":
