@@ -14,10 +14,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger("guardwatch")
 
-# Caché de detección de cámaras
-camera_cache = {"cameras": [], "last_update": 0}
-_camera_cache_lock = threading.Lock()
-CAMERA_CACHE_TTL = 10.0  # La caché dura 10 segundos
+CAMERA_LIST_TTL = 10.0  # Segundos durante los que se reutiliza la lista de cámaras locales detectadas
 ALLOWED_IP_SCHEMES = ("http://", "https://", "rtsp://")  # Esquemas admitidos para cámaras IP
 IP_OPEN_TIMEOUT_MS = 5000  # Tiempo máximo para conectar con una cámara IP
 IP_READ_TIMEOUT_MS = 5000  # Tiempo máximo esperando un frame de una cámara IP
@@ -93,37 +90,26 @@ def _probe_local_camera(index: int) -> Optional[Dict]:
                 pass
 
 
-def detect_local_cameras(max_cameras: int = 5, force_refresh: bool = False,
-                         skip_index: Optional[int] = None) -> List[Dict]:
-    """Detecta las cámaras locales disponibles, con caché.
+def detect_local_cameras(max_cameras: int = 5, skip_index: Optional[int] = None) -> List[Dict]:
+    """Detecta las cámaras locales disponibles (abre cada índice, así que tarda: CameraManager guarda la lista).
 
     skip_index: índice de la cámara que el pipeline tiene abierta; no se reabre para no interrumpirla y
     aparece siempre en la lista, aunque falten las de los índices anteriores.
     """
-    global camera_cache
-
-    with _camera_cache_lock:
-        now = time.time()
-        # La caché también vale cuando no hay cámaras (lista vacía), si ya se sondeó antes
-        if not force_refresh and camera_cache["last_update"] and (now - camera_cache["last_update"] < CAMERA_CACHE_TTL):
-            return camera_cache["cameras"]
-
-        cameras = []
-        consecutive_failures = 0
-        last_known = -1 if skip_index is None else skip_index
-        for i in range(max(max_cameras, last_known + 1)):
-            camera = _camera_entry(i, 640, 480) if i == skip_index else _probe_local_camera(i)
-            if camera:
-                cameras.append(camera)
-                consecutive_failures = 0
-            else:
-                consecutive_failures += 1
-            # Dos índices seguidos sin cámara: no hay más, salvo la que está en uso en un índice posterior
-            if consecutive_failures >= 2 and i >= last_known:
-                break
-
-        camera_cache = {"cameras": cameras, "last_update": now}
-        return cameras
+    cameras = []
+    consecutive_failures = 0
+    last_known = -1 if skip_index is None else skip_index
+    for i in range(max(max_cameras, last_known + 1)):
+        camera = _camera_entry(i, 640, 480) if i == skip_index else _probe_local_camera(i)
+        if camera:
+            cameras.append(camera)
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+        # Dos índices seguidos sin cámara: no hay más, salvo la que está en uso en un índice posterior
+        if consecutive_failures >= 2 and i >= last_known:
+            break
+    return cameras
 
 
 class CameraSource(BaseModel):
@@ -272,6 +258,11 @@ class CameraManager:
         self.error: Optional[str] = None
         self._on_switch = on_switch
         self._lock = threading.Lock()
+        # Cámaras locales detectadas la última vez y cuándo (0: aún no se ha sondeado); se reutilizan durante
+        # CAMERA_LIST_TTL, también si no había ninguna
+        self._local_cameras: List[Dict] = []
+        self._local_listed_at = 0.0
+        self._list_lock = threading.Lock()
         self._handover = None                # (fuente, cámara ya abierta) que select deja para read
         self._retry_requested = False        # select pide reconectar la cámara actual sin esperar
         # Estado del hilo de vídeo
@@ -326,10 +317,9 @@ class CameraManager:
                 # abierta (aún no conectó o falló) se sondea como las demás: darla por buena mostraba en la
                 # lista una cámara que no existe
                 in_use = source.type == "local" and self._cap is not None and self.error is None
-                available = detect_local_cameras(force_refresh=force_refresh,
-                                                 skip_index=source.index if in_use else None)
+                available = self._list_local(force_refresh, source.index if in_use else None)
             else:
-                available = camera_cache["cameras"]
+                available = self._local_cameras
         except Exception as e:
             logger.error("Falló la detección de cámaras: %s", e)
             available = []
@@ -339,6 +329,15 @@ class CameraManager:
             "available_local": available,
             "error": self.error,
         }
+
+    def _list_local(self, force_refresh: bool, skip_index: Optional[int]) -> List[Dict]:
+        """La lista de cámaras locales: la guardada si es reciente; si no, se vuelve a detectar."""
+        with self._list_lock:
+            now = time.time()
+            if force_refresh or not self._local_listed_at or now - self._local_listed_at >= CAMERA_LIST_TTL:
+                self._local_cameras = detect_local_cameras(skip_index=skip_index)
+                self._local_listed_at = now
+            return self._local_cameras
 
     def read(self):
         """El siguiente frame, o None si no lo hay (sin cámara, reconectando o un fallo de lectura)."""

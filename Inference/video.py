@@ -163,7 +163,7 @@ class VideoPipeline:
     """Bucle de vídeo: lee la cámara (cameras.CameraManager), detecta y cuenta, guarda las evidencias
     (evidence.EvidenceRecorder) y publica el frame anotado para el stream."""
 
-    def __init__(self, detector: Detector, start: bool = True):
+    def __init__(self, detector: Detector, recorder: evidence.EvidenceRecorder, start: bool = True):
         """start=False no arranca el hilo de vídeo (pruebas que llaman a _process_frame directamente)."""
         # Protege el modo: el detector, lo que contó (detected, la ventana de infracciones y el episodio de las
         # evidencias), que cambian a la vez, y el estado de la carga de otro modo
@@ -185,7 +185,7 @@ class VideoPipeline:
         self._errors = FailureStreak()
         self._prev_time: Optional[float] = None  # Hora del frame anterior (None: el primero de esta cámara)
 
-        self.evidence = evidence.EvidenceRecorder()
+        self.evidence = recorder
         self.camera = cameras.CameraManager(
             cameras.CameraSource(type="local", index=0, name=cameras.local_name(0)), on_switch=self._on_camera_switch)
 

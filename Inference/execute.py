@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import cameras
+import config
 import evidence
 import profiles
 import runtime
@@ -24,6 +25,7 @@ import video
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("guardwatch")
 
+settings = config.Settings.from_env()  # Variables GUARDWATCH_*: si alguna no es válida, el servidor no arranca
 pipeline = None  # VideoPipeline; se crea al arrancar el servidor (lifespan), no al importar el módulo
 
 
@@ -36,7 +38,8 @@ async def lifespan(_app):
     """
     global pipeline
     if pipeline is None:
-        pipeline = video.VideoPipeline(video.load_detector(STARTUP_PROFILE))
+        recorder = evidence.EvidenceRecorder(evidence.INFRACTIONS_DIR, evidence.LOG_FILE, settings.snapshot_days)
+        pipeline = video.VideoPipeline(video.load_detector(settings.profile), recorder)
     yield
     pipeline.stop()
 
@@ -49,11 +52,10 @@ app = FastAPI(title="GuardWatch AI Engine", lifespan=lifespan)
 DASHBOARD_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173",   # npm run dev
                      "http://localhost:4173", "http://127.0.0.1:4173",   # npm run preview
                      "https://hovanrojasignacio.github.io"]               # versión publicada en GitHub Pages
-extra_origins = [o.strip().rstrip("/") for o in os.environ.get("GUARDWATCH_ORIGINS", "").split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=DASHBOARD_ORIGINS + extra_origins,
+    allow_origins=DASHBOARD_ORIGINS + list(settings.origins),
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
@@ -63,8 +65,7 @@ app.add_middleware(
 # navegador le deja leer el vídeo y las infracciones. Esas peticiones llevan el dominio de la página en la
 # cabecera Host; las legítimas llevan localhost, el nombre de este equipo o una dirección IP (una IP no se puede
 # redirigir). GUARDWATCH_HOSTS añade otros nombres separados por comas (por ejemplo, el del equipo en el DNS local).
-ALLOWED_HOSTNAMES = {"localhost", socket.gethostname().lower()} | {
-    h.strip().lower() for h in os.environ.get("GUARDWATCH_HOSTS", "").split(",") if h.strip()}
+ALLOWED_HOSTNAMES = {"localhost", socket.gethostname().lower()} | settings.hosts
 
 
 def host_allowed(host: str) -> bool:
@@ -102,13 +103,8 @@ class HostCheckMiddleware:
 
 app.add_middleware(HostCheckMiddleware)
 
-app.mount("/static", StaticFiles(directory=evidence.static_dir), name="static")
-
-# Modo de detección con el que arranca el servidor (carpeta de Inference/profiles)
-STARTUP_PROFILE = os.environ.get("GUARDWATCH_PROFILE", "casco")
-if STARTUP_PROFILE not in profiles.discover():
-    raise SystemExit(f"GUARDWATCH_PROFILE={STARTUP_PROFILE!r} no es un perfil instalado. Disponibles: "
-                     f"{', '.join(profiles.discover()) or 'ninguno'} (carpetas de {profiles.PROFILES_DIR})")
+# La carpeta la crea el EvidenceRecorder al arrancar (no está en git): no se comprueba al importar
+app.mount("/static", StaticFiles(directory=evidence.STATIC_DIR, check_dir=False), name="static")
 
 
 class SettingsUpdate(BaseModel):
@@ -271,6 +267,5 @@ async def video_feed():
 
 if __name__ == "__main__":
     import uvicorn
-    # GUARDWATCH_HOST=127.0.0.1 limita el acceso a este equipo (por defecto, toda la red local)
     # El flujo MJPEG no termina solo: sin este límite, Ctrl+C esperaría a que el navegador cierre la pestaña
-    uvicorn.run(app, host=os.environ.get("GUARDWATCH_HOST", "0.0.0.0"), port=8000, timeout_graceful_shutdown=3)
+    uvicorn.run(app, host=settings.listen, port=8000, timeout_graceful_shutdown=3)

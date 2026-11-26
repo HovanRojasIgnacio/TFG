@@ -21,6 +21,7 @@ try:
 
     import execute  # Primero: fija variables de entorno que deben preceder a torch y OpenCV
     import cameras
+    import config
     import evidence
     import profiles
     import video
@@ -64,18 +65,15 @@ class PipelineTestCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.log_file = os.path.join(self.tmp.name, "infractions.json")
-        for name, value in (("infractions_dir", self.tmp.name), ("LOG_FILE", self.log_file)):
-            patcher = mock.patch.object(evidence, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
         self.model = FakeModel()
         self.pipeline = self.new_pipeline()
         self.frame = np.zeros((480, 640, 3), dtype=np.uint8)
         self.now = 1_000_000.0
 
-    def new_pipeline(self):
+    def new_pipeline(self, log_size=evidence.LOG_SIZE):
         detector = video.Detector(profiles.load("casco_chaleco"), Model(self.model, "best.pt", False))
-        return video.VideoPipeline(detector, start=False)
+        recorder = evidence.EvidenceRecorder(self.tmp.name, self.log_file, retention_days=30, log_size=log_size)
+        return video.VideoPipeline(detector, recorder, start=False)
 
     def process(self, detections, seconds=0.1):
         self.model.detections = detections
@@ -169,8 +167,7 @@ class UndeletedSnapshotTest(PipelineTestCase):
 
     def fill_log_with_a_failed_eviction(self):
         """Llena un registro de 2 entradas y registra una tercera mientras falla el borrado de la más antigua."""
-        with mock.patch.object(evidence, "LOG_SIZE", 2):
-            self.pipeline = self.new_pipeline()
+        self.pipeline = self.new_pipeline(log_size=2)
         for _ in range(2):
             self.next_capture_allowed()
             self.record_one_more()
@@ -537,7 +534,6 @@ class CameraTest(PipelineTestCase):
         self.assertEqual(self.pipeline.frame_id, frame_id)
 
     def test_the_camera_list_shows_only_cameras_that_exist(self):
-        self.addCleanup(cameras.camera_cache.update, cameras=[], last_update=0)
         with mock.patch.object(cameras, "_probe_local_camera", return_value=None) as probe:
             # Sin ninguna cámara: la que el servidor intenta abrir (y no consigue) no se da por buena
             self.assertEqual(self.pipeline.camera.info(force_refresh=True)["available_local"], [])
@@ -590,13 +586,24 @@ class MaskUrlTest(unittest.TestCase):
                 self.assertEqual(cameras.mask_url(url), masked)
 
 
-class RetentionTest(unittest.TestCase):
+class SettingsTest(unittest.TestCase):
     def test_the_retention_must_be_a_positive_number_of_days(self):
-        self.assertEqual(evidence.retention_days("30"), 30.0)
-        self.assertEqual(evidence.retention_days("0.5"), 0.5)
+        self.assertEqual(config.retention_days("30"), 30.0)
+        self.assertEqual(config.retention_days("0.5"), 0.5)
         for raw in ("0", "-1", "nan", "inf", "", "un mes"):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
-                evidence.retention_days(raw)
+                config.Settings.from_env({"GUARDWATCH_SNAPSHOT_DAYS": raw})
+
+    def test_lists_are_split_on_commas(self):
+        settings = config.Settings.from_env({"GUARDWATCH_ORIGINS": " http://10.0.0.2:5173/ ,,http://a:4173",
+                                             "GUARDWATCH_HOSTS": "Obra-PC, ,guardwatch.local"})
+        self.assertEqual(settings.origins, ("http://10.0.0.2:5173", "http://a:4173"))
+        self.assertEqual(settings.hosts, {"obra-pc", "guardwatch.local"})
+
+    def test_the_defaults(self):
+        settings = config.Settings.from_env({})
+        self.assertEqual((settings.profile, settings.snapshot_days, settings.origins, settings.hosts,
+                          settings.listen), ("casco", 30.0, (), frozenset(), "0.0.0.0"))
 
 
 class ImportTest(unittest.TestCase):

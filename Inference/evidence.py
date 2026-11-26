@@ -5,7 +5,6 @@ limpieza periódica de las capturas antiguas.
 """
 import json
 import logging
-import math
 import os
 import secrets
 import time
@@ -17,88 +16,16 @@ import profiles
 logger = logging.getLogger("guardwatch")
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-static_dir = os.path.join(current_dir, "static")
-infractions_dir = os.path.join(static_dir, "infractions")
-os.makedirs(infractions_dir, exist_ok=True)
-
-# Días que se conservan las capturas de infracciones. La Ley Orgánica 3/2018 (art. 22) fija un máximo de un
-# mes para las imágenes de videovigilancia salvo que se necesiten para acreditar un hecho.
-def retention_days(raw: str) -> float:
-    """Valida GUARDWATCH_SNAPSHOT_DAYS: un número de días mayor que cero.
-
-    Con 0 o un valor negativo la limpieza borraría todas las capturas, incluidas las recién guardadas, y con
-    "nan" no borraría ninguna.
-    """
-    try:
-        days = float(raw)
-    except ValueError:
-        days = math.nan
-    if not (math.isfinite(days) and days > 0):
-        raise ValueError(f"GUARDWATCH_SNAPSHOT_DAYS={raw!r} no es válido: debe ser un número de días mayor "
-                         "que 0 (por ejemplo, 30)")
-    return days
-
-
-try:
-    SNAPSHOT_RETENTION_DAYS = retention_days(os.environ.get("GUARDWATCH_SNAPSHOT_DAYS", "30"))
-except ValueError as e:
-    raise SystemExit(str(e))
+STATIC_DIR = os.path.join(current_dir, "static")  # Lo que sirve /static (sin autenticación)
+INFRACTIONS_DIR = os.path.join(STATIC_DIR, "infractions")
+# El registro se guarda fuera de /static: contiene los nombres de las capturas, que no deben poder adivinarse
+LOG_FILE = os.path.join(current_dir, "infractions.json")
 LOG_SIZE = 100  # Infracciones que conserva el registro
 SAVE_COOLDOWN = 4.0  # Segundos mínimos entre dos capturas de infracciones
 # Mientras la misma infracción sigue en la imagen se guarda una captura cada REPEAT_COOLDOWN segundos: una cada
 # SAVE_COOLDOWN llenaba el registro (100 entradas) en menos de siete minutos y borraba todas las anteriores
 REPEAT_COOLDOWN = 60.0
 PURGE_INTERVAL = 3600.0  # Cada cuánto se revisan las capturas antiguas mientras el servidor está en marcha (s)
-# El registro se guarda fuera de /static: contiene los nombres de las capturas, que no deben poder adivinarse
-LOG_FILE = os.path.join(current_dir, "infractions.json")
-
-
-def purge_old_snapshots() -> set:
-    """Borra las capturas con más de SNAPSHOT_RETENTION_DAYS días y devuelve sus nombres.
-
-    El registro solo conserva las últimas infracciones, así que sin esta limpieza las capturas que ya no están
-    en él se quedarían en el disco para siempre.
-    """
-    limit = time.time() - SNAPSHOT_RETENTION_DAYS * 86400
-    removed = set()
-    os.makedirs(infractions_dir, exist_ok=True)  # Por si alguien borró la carpeta con el servidor en marcha
-    for entry in os.scandir(infractions_dir):
-        try:
-            if entry.is_file() and entry.name.lower().endswith(".jpg") and entry.stat().st_mtime < limit:
-                os.remove(entry.path)
-                removed.add(entry.name)
-        except OSError as e:  # Borrada o bloqueada por otro proceso entre el listado y el borrado
-            logger.warning("No se pudo borrar la captura %s: %s", entry.name, e)
-    if removed:
-        logger.info("Borradas %d capturas con más de %g días", len(removed), SNAPSHOT_RETENTION_DAYS)
-    return removed
-
-
-def load_log() -> List[Dict]:
-    """Lee el registro de infracciones guardado y descarta las entradas cuya captura ya no existe."""
-    try:
-        with open(LOG_FILE, encoding="utf-8") as f:
-            entries = json.load(f)
-        if not isinstance(entries, list):
-            raise ValueError("no es una lista")
-        return [e for e in entries if isinstance(e, dict) and os.path.isfile(
-            os.path.join(infractions_dir, os.path.basename(str(e.get("image_path", "")))))][-LOG_SIZE:]
-    except FileNotFoundError:
-        return []
-    except (OSError, ValueError, AttributeError, RecursionError) as e:
-        logger.warning("No se pudo leer el registro de infracciones %s: %s", LOG_FILE, e)
-        return []
-
-
-def save_log(entries) -> None:
-    """Guarda el registro de infracciones (se escribe aparte y se sustituye, para no dejarlo a medias)."""
-    try:
-        tmp = LOG_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(list(entries), f, ensure_ascii=False)
-        os.replace(tmp, LOG_FILE)
-    except OSError as e:  # Se ejecuta en el hilo de vídeo: un fallo de disco no debe terminarlo
-        logger.error("No se pudo guardar el registro de infracciones: %s", e)
 
 
 def missing_details(profile: profiles.Profile, items: Dict[str, Dict[str, int]]) -> str:
@@ -108,15 +35,18 @@ def missing_details(profile: profiles.Profile, items: Dict[str, Dict[str, int]])
 
 
 class EvidenceRecorder:
-    """Capturas de las infracciones confirmadas y su registro (las últimas LOG_SIZE).
+    """Capturas de las infracciones confirmadas, en `folder`, y su registro (las últimas log_size), en `log_file`.
 
     Lo usa solo el hilo de vídeo; la API lee `log` (una deque: leerla mientras se añade una entrada es seguro).
     """
 
-    def __init__(self):
-        purge_old_snapshots()
+    def __init__(self, folder: str, log_file: str, retention_days: float, log_size: int = LOG_SIZE):
+        self.folder = folder
+        self.log_file = log_file
+        self.retention_days = retention_days
+        self._purge_old_snapshots()
         # Las infracciones de ejecuciones anteriores siguen en el panel
-        self.log = deque(load_log(), maxlen=LOG_SIZE)
+        self.log = deque(self._load_log(), maxlen=log_size)
         self.save_cooldown = SAVE_COOLDOWN
         self.repeat_cooldown = REPEAT_COOLDOWN
         self._last_save = 0.0
@@ -151,7 +81,7 @@ class EvidenceRecorder:
         self._last_purge = time.time()
         self._retry_undeleted()
         try:
-            removed = purge_old_snapshots()
+            removed = self._purge_old_snapshots()
         except OSError as e:
             # Se ejecuta en el único hilo de vídeo: un fallo de disco no debe terminarlo
             logger.error("No se pudieron revisar las capturas antiguas: %s", e)
@@ -159,13 +89,58 @@ class EvidenceRecorder:
         if removed:
             self.log = deque((item for item in self.log if os.path.basename(item["image_path"]) not in removed),
                              maxlen=self.log.maxlen)
-            save_log(self.log)
+            self._save_log()
+
+    def _purge_old_snapshots(self) -> set:
+        """Borra las capturas con más de retention_days días y devuelve sus nombres.
+
+        El registro solo conserva las últimas infracciones, así que sin esta limpieza las capturas que ya no están
+        en él se quedarían en el disco para siempre.
+        """
+        limit = time.time() - self.retention_days * 86400
+        removed = set()
+        os.makedirs(self.folder, exist_ok=True)  # Al arrancar o si alguien la borró con el servidor en marcha
+        for entry in os.scandir(self.folder):
+            try:
+                if entry.is_file() and entry.name.lower().endswith(".jpg") and entry.stat().st_mtime < limit:
+                    os.remove(entry.path)
+                    removed.add(entry.name)
+            except OSError as e:  # Borrada o bloqueada por otro proceso entre el listado y el borrado
+                logger.warning("No se pudo borrar la captura %s: %s", entry.name, e)
+        if removed:
+            logger.info("Borradas %d capturas con más de %g días", len(removed), self.retention_days)
+        return removed
+
+    def _load_log(self) -> List[Dict]:
+        """Lee el registro de infracciones guardado y descarta las entradas cuya captura ya no existe."""
+        try:
+            with open(self.log_file, encoding="utf-8") as f:
+                entries = json.load(f)
+            if not isinstance(entries, list):
+                raise ValueError("no es una lista")
+            return [e for e in entries if isinstance(e, dict) and os.path.isfile(
+                os.path.join(self.folder, os.path.basename(str(e.get("image_path", "")))))]
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError, AttributeError, RecursionError) as e:
+            logger.warning("No se pudo leer el registro de infracciones %s: %s", self.log_file, e)
+            return []
+
+    def _save_log(self) -> None:
+        """Guarda el registro de infracciones (se escribe aparte y se sustituye, para no dejarlo a medias)."""
+        try:
+            tmp = self.log_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(list(self.log), f, ensure_ascii=False)
+            os.replace(tmp, self.log_file)
+        except OSError as e:  # Se ejecuta en el hilo de vídeo: un fallo de disco no debe terminarlo
+            logger.error("No se pudo guardar el registro de infracciones: %s", e)
 
     def _retry_undeleted(self) -> None:
         """Reintenta borrar las capturas que salieron del registro y seguían abiertas en otro programa."""
         for name in list(self._undeleted):
             try:
-                os.remove(os.path.join(infractions_dir, name))
+                os.remove(os.path.join(self.folder, name))
             except FileNotFoundError:
                 pass
             except OSError as e:
@@ -177,7 +152,7 @@ class EvidenceRecorder:
         """Guarda la captura y la añade al registro (si está lleno, borra la más antigua)."""
         # /static no tiene autenticación: el sufijo aleatorio impide adivinar la dirección de una captura
         filename = f"inf_{int(now)}_{secrets.token_hex(8)}.jpg"
-        filepath = os.path.join(infractions_dir, filename)
+        filepath = os.path.join(self.folder, filename)
         self._last_save = now
         if not cv2.imwrite(filepath, frame):
             # Disco lleno o carpeta sin permisos: sin imagen no se registra una entrada con la evidencia rota
@@ -187,7 +162,7 @@ class EvidenceRecorder:
         if len(self.log) == self.log.maxlen:
             evicted = os.path.basename(self.log[0]["image_path"])
             try:
-                os.remove(os.path.join(infractions_dir, evicted))
+                os.remove(os.path.join(self.folder, evicted))
             except OSError as e:
                 logger.warning("No se pudo borrar la captura %s: %s", evicted, e)
                 self._undeleted.add(evicted)
@@ -201,4 +176,4 @@ class EvidenceRecorder:
             "profile": profile.name,
             "details": missing_details(profile, counts.items),
         })
-        save_log(self.log)
+        self._save_log()
