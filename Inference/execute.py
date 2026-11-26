@@ -231,6 +231,10 @@ def get_stats():
     }
 
 
+# Separador y cabeceras de una parte del MJPEG; cada frame se envía seguido de los de la parte siguiente
+PART_HEADER = b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+
+
 async def stream_generator():
     """Generador asíncrono: no ocupa hilos del servidor mientras espera frames.
 
@@ -238,7 +242,12 @@ async def stream_generator():
     los endpoints; sin frames (cámara caída) cada espectador que se iba dejaba un hilo ocupado y, al
     acumularse, la API entera dejaba de responder. Al desconectarse el cliente, Starlette cancela el
     asyncio.sleep y el generador termina.
+
+    Cada frame va seguido del separador y las cabeceras de la parte siguiente: Chromium solo muestra una parte
+    cuando los recibe, así que con ellos delante cada frame se veía con un frame de retraso y el último antes de
+    una pausa (por ejemplo, «SIN IMAGEN» al perder la cámara) no se veía nunca.
     """
+    yield PART_HEADER
     last_id = -1
     while True:
         pipeline.last_viewer_time = time.time()
@@ -249,8 +258,7 @@ async def stream_generator():
         # Solo se envía si hay un frame nuevo (evita reenviar el mismo frame)
         if frame_bytes is not None and frame_id != last_id:
             last_id = frame_id
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            yield frame_bytes + b'\r\n' + PART_HEADER
         await asyncio.sleep(0.03)  # Limita el envío a ~30 FPS para no saturar el canal HTTP
 
 

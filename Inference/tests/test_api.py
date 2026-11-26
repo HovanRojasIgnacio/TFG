@@ -4,6 +4,7 @@ Necesitan FastAPI, Pydantic, NumPy, OpenCV y httpx (no PyTorch ni Ultralytics: e
 cargar un modelo); sin ellos se omiten, de modo que `python -m unittest discover -s Inference/tests` sigue
 funcionando solo con la biblioteca estándar.
 """
+import asyncio
 import os
 import sys
 import tempfile
@@ -248,6 +249,21 @@ class ApiTest(PipelineTestCase):
         self.assertEqual(data["infractions_total"], 1)
         self.assertEqual(data["last_infraction_id"], self.pipeline.evidence.log[-1]["id"])
 
+    def test_each_frame_is_followed_by_the_next_part_header(self):
+        """Chromium muestra una parte al recibir el separador y las cabeceras de la siguiente."""
+        self.pipeline.latest_encoded_frame = b"jpeg"
+
+        async def first_parts():
+            stream = execute.stream_generator()
+            try:
+                return [await anext(stream) for _ in range(2)]
+            finally:
+                await stream.aclose()
+
+        self.assertEqual(asyncio.run(first_parts()),
+                         [b"--frame\r\nContent-Type: image/jpeg\r\n\r\n",
+                          b"jpeg\r\n--frame\r\nContent-Type: image/jpeg\r\n\r\n"])
+
     def test_the_whole_log_can_be_read(self):
         with mock.patch.object(self.pipeline.evidence, "repeat_cooldown", 0.0), \
                 mock.patch.object(self.pipeline.evidence, "save_cooldown", 0.0):
@@ -481,11 +497,8 @@ class CameraTest(PipelineTestCase):
         self.assertIs(self.pipeline.latest_encoded_frame, video.NO_SIGNAL_JPEG)
         self.assertIsNotNone(self.pipeline.camera_error)
         frame_id = self.pipeline.frame_id
-        video.time.sleep(0.6)   # No se publica en cada reintento...
+        video.time.sleep(0.6)   # Se publica una vez, no en cada reintento
         self.assertEqual(self.pipeline.frame_id, frame_id)
-        video.time.sleep(1.0)   # ...pero sí cada segundo, para que el navegador muestre la parte anterior
-        self.assertGreater(self.pipeline.frame_id, frame_id)
-        self.assertIs(self.pipeline.latest_encoded_frame, video.NO_SIGNAL_JPEG)
 
     def test_the_camera_list_shows_only_cameras_that_exist(self):
         self.addCleanup(cameras.camera_cache.update, cameras=[], last_update=0)
