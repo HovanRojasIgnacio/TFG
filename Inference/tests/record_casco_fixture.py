@@ -54,9 +54,9 @@ def main():
     profile = profiles.load("casco")
     frames = []
     for path in images[:args.count]:
-        names, confs, coords = model.detect(path, args.conf)
-        result = counting.count(profile, names, confs, coords)
-        frames.append({"names": names, "confs": confs, "boxes": coords,
+        detections = model.detect(path, args.conf)
+        result = counting.count(profile, detections)
+        frames.append({"names": detections.names, "confs": detections.confs, "boxes": detections.coords,
                        "counts": _legacy(result), "highest": result.highest_violation, "flags": result.flags})
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)

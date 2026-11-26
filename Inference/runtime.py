@@ -15,9 +15,10 @@ import os
 import shutil
 import tempfile
 import urllib.request
-from typing import Any, Callable, List, NamedTuple, Optional
+from typing import Any, Callable, NamedTuple, Optional
 
 import numpy as np
+from counting import Detections
 
 logger = logging.getLogger("guardwatch")
 
@@ -53,13 +54,6 @@ def free_gpu_memory() -> None:
     import torch
     gc.collect()
     torch.cuda.empty_cache()
-
-
-class Detections(NamedTuple):
-    """Los recuadros de una imagen, en listas paralelas."""
-    names: List[str]          # Clase de cada recuadro
-    confs: List[float]
-    coords: List[List[int]]   # x1, y1, x2, y2 en píxeles enteros: los que se dibujan y se cuentan
 
 
 class Model(NamedTuple):

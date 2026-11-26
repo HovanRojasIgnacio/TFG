@@ -268,13 +268,13 @@ class VideoPipeline:
         """Detección, dibujo, registro de infracciones y codificación de un frame."""
         # Una sola lectura por frame: si se cambia de modo a mitad, este frame termina con el detector anterior
         detector = self.detector
-        names, confs, coords = detector.model.detect(frame, self.conf_threshold)
+        detections = detector.model.detect(frame, self.conf_threshold)
 
         # Cada operario cuenta una vez aunque el modelo lo marque como persona, cabeza y casco
-        counts = counting.count(detector.profile, names, confs, coords)
+        counts = counting.count(detector.profile, detections)
 
         # Solo se dibujan los recuadros que cuentan, para que la imagen coincida con los contadores
-        self._draw_boxes(frame, detector, coords, confs, names, counts.flags)
+        self._draw_boxes(frame, detector, detections, counts.flags)
 
         # Si se cambió de modo durante este frame, sus contadores ya no corresponden al modo actual
         with self._profile_lock:
@@ -288,9 +288,9 @@ class VideoPipeline:
         self.latency_window.append((time.perf_counter() - frame_start) * 1000)
 
     @staticmethod
-    def _draw_boxes(frame, detector: Detector, coords, confs, names, flags):
+    def _draw_boxes(frame, detector: Detector, detections: counting.Detections, flags):
         """Dibuja sobre el frame solo los recuadros que cuentan, para que la imagen coincida con los contadores."""
-        for (x1, y1, x2, y2), conf, name, counted in zip(coords, confs, names, flags):
+        for name, conf, (x1, y1, x2, y2), counted in zip(*detections, flags):
             if not counted:
                 continue
             color, text = detector.styles[name]

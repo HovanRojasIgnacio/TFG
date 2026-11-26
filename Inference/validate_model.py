@@ -63,15 +63,9 @@ def report_map(pt_model, engine_model, data, split):
         print(f"{names[int(cls)]:22} {pt_v:>8.3f} {en_v:>8.3f} {en_v - pt_v:>+8.3f}")
 
 
-def _predict(model, path, conf):
-    """[(clase, confianza, recuadro)] con la misma inferencia que el servidor."""
-    return list(zip(*model.detect(path, conf)))
-
-
-def _is_violation(profile, dets):
+def _has_violation(profile, detections):
     # Misma regla que el servidor: cada operario cuenta una vez (véase counting.py)
-    names, confs, coords = zip(*dets) if dets else ((), (), ())
-    return counting.count(profile, names, confs, coords).violations > 0
+    return counting.count(profile, detections).violations > 0
 
 
 def report_agreement(profile, pt_model, engine_model, folder):
@@ -84,13 +78,13 @@ def report_agreement(profile, pt_model, engine_model, folder):
     conf_diffs = []
     total_ref = 0
     for path in images:
-        ref = _predict(pt_model, path, threshold)  # best.pt en FP32 (referencia)
-        out = _predict(engine_model, path, threshold)
-        total_ref += len(ref)
+        ref = pt_model.detect(path, threshold)  # best.pt en FP32 (referencia), con la inferencia del servidor
+        out = engine_model.detect(path, threshold)
+        total_ref += len(ref.names)
         used = set()
-        for cls, conf, box in ref:
+        for cls, conf, box in zip(*ref):
             best = None
-            for i, (c2, conf2, box2) in enumerate(out):
+            for i, (c2, conf2, box2) in enumerate(zip(*out)):
                 if i in used or c2 != cls:
                     continue
                 v = counting.iou(box, box2)
@@ -102,8 +96,8 @@ def report_agreement(profile, pt_model, engine_model, folder):
                 conf_diffs.append(abs(conf - best[2]))
             else:
                 missed += 1
-        extra += len(out) - len(used)
-        flips += _is_violation(profile, ref) != _is_violation(profile, out)
+        extra += len(out.names) - len(used)
+        flips += _has_violation(profile, ref) != _has_violation(profile, out)
     mean_diff = sum(conf_diffs) / max(len(conf_diffs), 1)
     print(f"\nConcordancia del motor frente a best.pt (FP32) en {len(images)} imágenes de {folder}")
     print(f"  detecciones de referencia : {total_ref}")

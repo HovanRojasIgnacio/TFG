@@ -18,6 +18,13 @@ from profiles import Profile
 Box = Sequence[float]  # x1, y1, x2, y2
 
 
+class Detections(NamedTuple):
+    """Los recuadros de una imagen, en listas paralelas (lo que da runtime.Model.detect y lo que se cuenta)."""
+    names: List[str]          # Clase de cada recuadro
+    confs: List[float]
+    coords: List[List[int]]   # x1, y1, x2, y2 en píxeles enteros: los que se dibujan y se cuentan
+
+
 def _contains(outer: Box, inner: Box) -> bool:
     """True si el centro del recuadro `inner` está dentro de `outer` (la cabeza está en esa persona)."""
     cx, cy = (inner[0] + inner[2]) / 2, (inner[1] + inner[3]) / 2
@@ -91,8 +98,7 @@ def _flags_with_levels(rules, boxes: Sequence[Box], confs: Sequence[float]) -> L
     return flags
 
 
-def counted_flags(profile: Profile, class_names: Sequence[str],
-                  boxes: Sequence[Box], confs: Sequence[float]) -> List[bool]:
+def counted_flags(profile: Profile, detections: Detections) -> List[bool]:
     """Indica, para cada recuadro del frame, si cuenta en los contadores (un recuadro por operario).
 
     Cada operario se identifica por su posición. Con niveles en el perfil cuentan las cabezas y las personas a
@@ -100,7 +106,8 @@ def counted_flags(profile: Profile, class_names: Sequence[str],
     veces marca dos veces a la misma persona). Sin niveles cuenta cada recuadro no neutral ni ignorado. En los
     dos casos, de dos recuadros solapados que se contradicen solo cuenta el más fiable.
     """
-    rules = [profile.rule(n) for n in class_names]
+    rules = [profile.rule(n) for n in detections.names]
+    boxes, confs = detections.coords, detections.confs
     # La jerarquía la decide el perfil, no el frame: un casco suelto no es un operario aunque sea lo único visible
     if any(r.level is not None for r in profile.classes.values()):
         return _flags_with_levels(rules, boxes, confs)
@@ -146,14 +153,13 @@ class Counts(NamedTuple):
         return cls({item: {"ok": 0, "missing": 0} for item in profile.items}, 0, 0.0, [])
 
 
-def count(profile: Profile, class_names: Sequence[str], confs: Sequence[float],
-          boxes: Sequence[Box]) -> Counts:
+def count(profile: Profile, detections: Detections) -> Counts:
     """Cuenta los elementos llevados y los que faltan, los recuadros neutrales y la confianza de la infracción."""
     items = Counts.empty(profile).items
     neutral = 0
     highest = 0.0
-    flags = counted_flags(profile, class_names, boxes, confs)
-    for name, conf, counted in zip(class_names, confs, flags):
+    flags = counted_flags(profile, detections)
+    for name, conf, counted in zip(detections.names, detections.confs, flags):
         if not counted:
             continue
         rule = profile.rule(name)
